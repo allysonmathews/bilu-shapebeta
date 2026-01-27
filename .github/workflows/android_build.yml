@@ -22,7 +22,7 @@ jobs:
           cache: 'npm'
       
       - name: Instalar dependências
-        run: npm ci
+        run: npm install --legacy-peer-deps
       
       - name: Build do Vite
         run: npm run build
