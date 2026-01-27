@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "8aa746cf-c748-4c9e-804a-8a7d66524c71"
+      }
+    },
+    "android": {
+      "package": "com.biluverso.bilushape"
+    }
+  }
+}
