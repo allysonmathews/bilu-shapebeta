@@ -1,5 +1,19 @@
 apply plugin: 'com.android.application'
 
+// Função para gerar versionCode baseado no timestamp
+def getVersionCode() {
+    def date = new Date()
+    def formattedDate = date.format('yyMMddHHmm', TimeZone.getTimeZone('UTC'))
+    return Integer.parseInt(formattedDate)
+}
+
+// Função para gerar versionName baseado no timestamp (formato: 1.0.YYMMDD)
+def getVersionName() {
+    def date = new Date()
+    def formattedDate = date.format('yyMMdd', TimeZone.getTimeZone('UTC'))
+    return "1.0.${formattedDate}"
+}
+
 android {
     namespace = "com.example.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +21,8 @@ android {
         applicationId "com.example.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode getVersionCode()
+        versionName getVersionName()
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
