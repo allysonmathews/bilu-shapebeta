@@ -14,7 +14,7 @@ import { translateMuscleGroup } from '../utils/muscleGroupTranslations';
 export const WorkoutView: React.FC = () => {
   const { plan, onboardingData, updateExerciseProgress, setPlan } = useUser();
   const { swapExercise, generatePlan } = usePlan();
-  const { saveWeight, finishWorkout, getWorkoutByDate } = useProgress();
+  const { saveWeight, finishWorkout, getWorkoutByDate, workoutHistory } = useProgress();
   
   // Auto-seed: Gerar plano padrão se não houver plano e houver onboardingData
   useEffect(() => {
@@ -57,6 +57,7 @@ export const WorkoutView: React.FC = () => {
   const [savedExercises, setSavedExercises] = useState<Set<string>>(new Set());
   const [lastSavedWeights, setLastSavedWeights] = useState<Record<string, number>>({});
   const [executionModalExerciseId, setExecutionModalExerciseId] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
 
   // Calcular data selecionada (usar selectedDateString diretamente)
   const selectedDate = selectedDateString;
@@ -110,6 +111,32 @@ export const WorkoutView: React.FC = () => {
   const historicalWorkout = useMemo(() => {
     return getWorkoutByDate(selectedDate);
   }, [selectedDate, getWorkoutByDate]);
+
+  // Salvar automaticamente quando sair do modo de edição
+  useEffect(() => {
+    // Só executar quando isEditing mudar de true para false
+    if (!isEditing && historicalWorkout && workoutData?.workout?.id && Object.keys(exerciseWeights).length > 0) {
+      // Salvar todas as alterações feitas durante a edição
+      const exercisesData = workoutData.workout.exercises
+        .filter(ex => ex != null)
+        .map(ex => ({
+          name: ex?.name ?? 'Exercício',
+          weight: exerciseWeights[ex?.id ?? ''] || ex?.weight || 0,
+          done: exerciseDone[ex?.id ?? ''] || false,
+        }));
+      
+      finishWorkout(selectedDate, workoutData.workout.id, exercisesData);
+      
+      // Salvar pesos individuais também
+      Object.keys(exerciseWeights).forEach(exerciseId => {
+        const weight = exerciseWeights[exerciseId];
+        if (weight && weight > 0) {
+          saveWeight(exerciseId, weight, selectedDate);
+        }
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing]);
 
   // Calcular qual treino corresponde ao dia selecionado
   // O plano usa workoutDays onde 1=Segunda, 2=Terça, etc., e dayNumber = (week-1)*7 + dayOfWeek
@@ -261,11 +288,16 @@ export const WorkoutView: React.FC = () => {
         );
       }
     }
+    
+    // Se estiver em modo de edição e for histórico, salvar automaticamente
+    if (isEditing && historicalWorkout && weight > 0) {
+      saveWeight(exerciseId, weight, selectedDate);
+    }
   };
 
   const handleSaveWeight = (exerciseId: string, weight: number) => {
-    // Só permitir salvar se não for histórico e não for futuro
-    if (weight > 0 && !historicalWorkout && !isFuture) {
+    // Permitir salvar se não for futuro E (não for histórico OU estiver em modo de edição)
+    if (weight > 0 && !isFuture && (!historicalWorkout || isEditing)) {
       // Verificar se o valor realmente mudou para evitar salvamentos desnecessários
       const lastSaved = lastSavedWeights[exerciseId];
       if (lastSaved !== undefined && lastSaved === weight) {
@@ -285,6 +317,19 @@ export const WorkoutView: React.FC = () => {
       saveWeight(exerciseId, weight, selectedDate);
       setLastSavedWeights(prev => ({ ...prev, [exerciseId]: weight }));
       setSavedExercises(prev => new Set(prev).add(exerciseId));
+      
+      // Se estiver em modo de edição e for histórico, atualizar o workoutHistory também
+      if (isEditing && historicalWorkout && workoutData?.workout?.id) {
+        const exercisesData = displayExercises
+          .filter(ex => ex != null)
+          .map(ex => ({
+            name: ex?.name ?? 'Exercício',
+            weight: exerciseWeights[ex?.id ?? ''] || ex?.weight || 0,
+            done: exerciseDone[ex?.id ?? ''] || false,
+          }));
+        finishWorkout(selectedDate, workoutData.workout.id, exercisesData);
+      }
+      
       setTimeout(() => {
         setSavedExercises(prev => {
           const newSet = new Set(prev);
@@ -382,10 +427,14 @@ export const WorkoutView: React.FC = () => {
         .filter(ex => ex != null) // Filtrar exercícios nulos
         .map(ex => {
           const historicalEx = contentToDisplay.data?.exercises?.find(h => h?.name === ex?.name);
+          // Se estiver em modo de edição, usar exerciseWeights se disponível, senão usar histórico
+          const currentWeight = isEditing && exerciseWeights[ex.id] !== undefined
+            ? exerciseWeights[ex.id]
+            : (historicalEx?.weight ?? ex?.weight ?? 0);
           return {
             ...ex,
-            weight: historicalEx?.weight ?? ex?.weight ?? 0,
-            done: historicalEx?.done ?? false,
+            weight: currentWeight,
+            done: exerciseDone[ex.id] !== undefined ? exerciseDone[ex.id] : (historicalEx?.done ?? false),
           };
         });
     }
@@ -402,7 +451,7 @@ export const WorkoutView: React.FC = () => {
     }
 
     return [];
-  }, [contentToDisplay, workoutData, exerciseWeights, exerciseDone]);
+  }, [contentToDisplay, workoutData, exerciseWeights, exerciseDone, isEditing]);
 
   // Identificar grupos musculares únicos do dia com verificações de segurança
   const uniqueMuscleGroups = useMemo(() => {
@@ -567,9 +616,23 @@ export const WorkoutView: React.FC = () => {
             <div className="flex items-center gap-2 text-sm flex-wrap">
               {contentToDisplay.type === 'history' ? (
                 <>
-                  <span className="text-alien-green bg-alien-green/20 px-3 py-1 rounded-full font-medium">
-                    ✓ Realizado
-                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      // Prevenir qualquer navegação ou scroll
+                      e.currentTarget.blur();
+                      setIsEditing(prev => !prev);
+                    }}
+                    className={`px-3 py-1 rounded-full font-medium transition-all duration-200 ${
+                      isEditing
+                        ? 'text-deep-bg bg-alien-green hover:bg-[#2EE010] cursor-pointer'
+                        : 'text-alien-green bg-alien-green/20 hover:bg-alien-green/30 cursor-pointer'
+                    }`}
+                    type="button"
+                  >
+                    {isEditing ? '✎ Editando' : '✓ Realizado'}
+                  </button>
                   <span className="text-gray-400 text-xs">
                     {new Date(selectedDate).toLocaleDateString('pt-BR')}
                   </span>
@@ -679,16 +742,16 @@ export const WorkoutView: React.FC = () => {
                             type="number"
                             value={exercise?.weight ?? ''}
                             onChange={(e) => {
-                              if (!historicalWorkout && !isFuture && exercise?.id) {
+                              if (exercise?.id && (!historicalWorkout || isEditing) && !isFuture) {
                                 handleWeightChange(exercise.id, parseFloat(e.target.value) || 0);
                               }
                             }}
                             placeholder="Ex: 20"
-                            disabled={!!historicalWorkout || isFuture}
+                            disabled={(!!historicalWorkout && !isEditing) || isFuture}
                           />
                         </div>
-                        {historicalWorkout ? (
-                          // Modo histórico: apenas mostrar peso usado
+                        {historicalWorkout && !isEditing ? (
+                          // Modo histórico sem edição: apenas mostrar peso usado
                           exercise?.weight && (
                             <div className="px-4 py-2.5 rounded-lg bg-gray-700 text-white">
                               <span className="text-sm">{exercise.weight} kg</span>
@@ -700,7 +763,7 @@ export const WorkoutView: React.FC = () => {
                             <span className="text-xs">Planejado</span>
                           </div>
                         ) : (
-                          // Modo hoje/passado sem histórico: permitir edição
+                          // Modo hoje/passado sem histórico OU modo histórico em edição: permitir edição
                           <>
                             <button
                               onClick={() => {
@@ -727,32 +790,36 @@ export const WorkoutView: React.FC = () => {
                                 </>
                               )}
                             </button>
-                            <button
-                              onClick={() => {
-                                if (exercise?.id) {
-                                  setExecutionModalExerciseId(exercise.id);
-                                }
-                              }}
-                              className="px-4 py-2.5 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 bg-alien-green text-deep-bg hover:bg-[#2EE010]"
-                            >
-                              <Play size={18} />
-                              <span className="text-xs">Iniciar</span>
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (exercise?.id) {
-                                  setExerciseDone(prev => ({ ...prev, [exercise.id]: !prev[exercise.id] }));
-                                }
-                              }}
-                              className={`px-4 py-2.5 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 ${
-                                exerciseDone[exercise.id]
-                                  ? 'bg-alien-green text-deep-bg'
-                                  : 'bg-gray-700 text-white hover:bg-gray-600'
-                              }`}
-                            >
-                              <Check size={18} />
-                              <span className="text-xs">{exerciseDone[exercise.id] ? 'Feito' : 'Fazer'}</span>
-                            </button>
+                            {!historicalWorkout && (
+                              <>
+                                <button
+                                  onClick={() => {
+                                    if (exercise?.id) {
+                                      setExecutionModalExerciseId(exercise.id);
+                                    }
+                                  }}
+                                  className="px-4 py-2.5 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 bg-alien-green text-deep-bg hover:bg-[#2EE010]"
+                                >
+                                  <Play size={18} />
+                                  <span className="text-xs">Iniciar</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (exercise?.id) {
+                                      setExerciseDone(prev => ({ ...prev, [exercise.id]: !prev[exercise.id] }));
+                                    }
+                                  }}
+                                  className={`px-4 py-2.5 rounded-lg font-medium transition-all duration-200 flex items-center gap-2 ${
+                                    exerciseDone[exercise.id]
+                                      ? 'bg-alien-green text-deep-bg'
+                                      : 'bg-gray-700 text-white hover:bg-gray-600'
+                                  }`}
+                                >
+                                  <Check size={18} />
+                                  <span className="text-xs">{exerciseDone[exercise.id] ? 'Feito' : 'Fazer'}</span>
+                                </button>
+                              </>
+                            )}
                           </>
                         )}
                       </div>
