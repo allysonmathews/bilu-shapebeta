@@ -19,7 +19,7 @@ def patchVersion = Integer.parseInt(versionProperties['VERSION_PATCH'] ?: '0')
 def generatedVersionCode = majorVersion * 10000 + minorVersion * 100 + patchVersion
 
 // Construir versionName no formato X.Y.Z
-def versionName = "${majorVersion}.${minorVersion}.${patchVersion}"
+def generatedVersionName = "${majorVersion}.${minorVersion}.${patchVersion}"
 
 android {
     namespace = "com.example.app"
@@ -50,7 +50,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode generatedVersionCode
-        versionName versionName
+        versionName generatedVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
