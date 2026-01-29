@@ -2,7 +2,7 @@ apply plugin: 'com.android.application'
 
 // Variáveis de controle de versão (Major.Minor.Patch)
 def majorVersion = 1
-def minorVersion = 1
+def minorVersion = 2
 
 // Função para obter o número total de commits do Git
 def getGitCommitCount() {
