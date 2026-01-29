@@ -31,7 +31,9 @@ def getGitCommitCount() {
             ignoreExitValue = true
         }
         def count = stdout.toString().trim()
-        return count ? Integer.parseInt(count) : 1
+        def gitCommitCount = count ? Integer.parseInt(count) : 1
+        println "DEBUG: Total Commits encontrados: " + gitCommitCount
+        return gitCommitCount
     } catch (Exception e) {
         return 1
     }
