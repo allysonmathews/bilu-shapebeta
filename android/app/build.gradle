@@ -1,5 +1,9 @@
 apply plugin: 'com.android.application'
 
+// Variáveis de controle de versão (Major.Minor.Patch)
+def majorVersion = 1
+def minorVersion = 0
+
 // Função para obter o número total de commits do Git
 def getGitCommitCount() {
     try {
@@ -32,7 +36,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode getGitCommitCount()
-        versionName "1.0.${getGitCommitCount()}-${getGitCommitHash()}"
+        versionName "${majorVersion}.${minorVersion}.${getGitCommitCount()}"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

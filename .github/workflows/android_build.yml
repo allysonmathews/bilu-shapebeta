@@ -67,15 +67,11 @@ jobs:
         working-directory: ./android
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleDebug
-      
-      - name: Obter versão do package.json
-        id: package_version
-        run: echo "VERSION=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+          ./gradlew assembleRelease
       
       - name: Fazer upload do APK
         uses: actions/upload-artifact@v4
         with:
-          name: bilu-shape-v${{ steps.package_version.outputs.VERSION }}
-          path: android/app/build/outputs/apk/debug/*BiluShape*.apk
+          name: BiluShape-Release
+          path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
