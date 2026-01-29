@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Android
+android/app/debug.keystore
+android/.gradle
+android/app/build
+android/build
