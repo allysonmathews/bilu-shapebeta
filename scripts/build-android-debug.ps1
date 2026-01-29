@@ -8,8 +8,50 @@ $androidDir = Join-Path $root "android"
 $appDir = Join-Path $androidDir "app"
 $keystorePath = Join-Path $appDir "debug.keystore"
 $gradlew = Join-Path $androidDir "gradlew.bat"
+$versionPropertiesPath = Join-Path $androidDir "version.properties"
 
 Write-Host "=== Build Android Debug - Bilu Shape ===" -ForegroundColor Cyan
+Write-Host ""
+
+# Incrementar versão automaticamente
+Write-Host "Atualizando versao..." -ForegroundColor Yellow
+if (Test-Path $versionPropertiesPath) {
+    # Ler propriedades atuais
+    $versionProperties = @{}
+    Get-Content $versionPropertiesPath | ForEach-Object {
+        if ($_ -match '^\s*([^=]+)\s*=\s*(.+)\s*$') {
+            $versionProperties[$matches[1].Trim()] = $matches[2].Trim()
+        }
+    }
+    
+    # Obter valores atuais
+    $major = [int]$versionProperties['VERSION_MAJOR']
+    $minor = [int]$versionProperties['VERSION_MINOR']
+    $patch = [int]$versionProperties['VERSION_PATCH']
+    
+    # Incrementar patch
+    $patch++
+    
+    # Salvar propriedades atualizadas
+    $newContent = @"
+VERSION_MAJOR=$major
+VERSION_MINOR=$minor
+VERSION_PATCH=$patch
+"@
+    Set-Content -Path $versionPropertiesPath -Value $newContent -Encoding UTF8
+    
+    Write-Host "Versao atualizada: $major.$minor.$patch" -ForegroundColor Green
+} else {
+    Write-Host "AVISO: Arquivo version.properties nao encontrado. Criando com valores padrao..." -ForegroundColor Yellow
+    $defaultContent = @"
+VERSION_MAJOR=1
+VERSION_MINOR=0
+VERSION_PATCH=1
+"@
+    Set-Content -Path $versionPropertiesPath -Value $defaultContent -Encoding UTF8
+    Write-Host "Arquivo version.properties criado com versao 1.0.1" -ForegroundColor Green
+}
+
 Write-Host ""
 
 # Verificar se o keystore de debug existe ou se existe o keystore padrão do sistema

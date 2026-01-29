@@ -1,23 +1,25 @@
 apply plugin: 'com.android.application'
 
-// Variáveis de controle de versão (Major.Minor.Patch)
-def majorVersion = 1
-def minorVersion = 2
+// Carregar propriedades de versão do arquivo version.properties
+def versionPropertiesFile = file('../version.properties')
+def versionProperties = new Properties()
 
-// Função para obter o número total de commits do Git
-def getGitCommitCount() {
-    try {
-        def stdout = new ByteArrayOutputStream()
-        exec {
-            workingDir "../" 
-            commandLine 'git', 'rev-list', '--count', 'HEAD'
-            standardOutput = stdout
-        }
-        return Integer.parseInt(stdout.toString().trim())
-    } catch (Exception e) {
-        return 1
-    }
+if (versionPropertiesFile.exists()) {
+    versionProperties.load(new FileInputStream(versionPropertiesFile))
+} else {
+    throw new FileNotFoundException("Arquivo version.properties não encontrado em ${versionPropertiesFile.absolutePath}")
 }
+
+// Ler valores de versão do arquivo properties
+def majorVersion = Integer.parseInt(versionProperties['VERSION_MAJOR'] ?: '1')
+def minorVersion = Integer.parseInt(versionProperties['VERSION_MINOR'] ?: '0')
+def patchVersion = Integer.parseInt(versionProperties['VERSION_PATCH'] ?: '0')
+
+// Calcular versionCode automaticamente: major * 10000 + minor * 100 + patch
+def versionCode = majorVersion * 10000 + minorVersion * 100 + patchVersion
+
+// Construir versionName no formato X.Y.Z
+def versionName = "${majorVersion}.${minorVersion}.${patchVersion}"
 
 android {
     namespace = "com.example.app"
@@ -47,8 +49,8 @@ android {
         applicationId "com.example.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode getGitCommitCount()
-        versionName "${majorVersion}.${minorVersion}.${getGitCommitCount()}"
+        versionCode versionCode
+        versionName versionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
