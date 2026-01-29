@@ -10,16 +10,40 @@ if (versionPropertiesFile.exists()) {
     throw new FileNotFoundException("Arquivo version.properties não encontrado em ${versionPropertiesFile.absolutePath}")
 }
 
-// Ler valores de versão do arquivo properties
+// Ler valores de versão do arquivo properties (apenas MAJOR e MINOR)
 def majorVersion = Integer.parseInt(versionProperties['VERSION_MAJOR'] ?: '1')
 def minorVersion = Integer.parseInt(versionProperties['VERSION_MINOR'] ?: '0')
-def patchVersion = Integer.parseInt(versionProperties['VERSION_PATCH'] ?: '0')
 
-// Calcular versionCode automaticamente: major * 10000 + minor * 100 + patch
-def generatedVersionCode = majorVersion * 10000 + minorVersion * 100 + patchVersion
+// Função para obter o número total de commits do Git (Patch = quantidade de commits)
+// workingDir: raiz do repositório (pasta acima de android/, onde fica .git)
+def getGitCommitCount() {
+    try {
+        def repoRoot = project.rootProject.projectDir.parentFile
+        def gitDir = new File(repoRoot, '.git')
+        if (!gitDir.exists()) {
+            return 1
+        }
+        def stdout = new ByteArrayOutputStream()
+        exec {
+            workingDir repoRoot
+            commandLine 'git', 'rev-list', '--count', 'HEAD'
+            standardOutput = stdout
+            ignoreExitValue = true
+        }
+        def count = stdout.toString().trim()
+        return count ? Integer.parseInt(count) : 1
+    } catch (Exception e) {
+        return 1
+    }
+}
 
-// Construir versionName no formato X.Y.Z
-def generatedVersionName = "${majorVersion}.${minorVersion}.${patchVersion}"
+def gitCommitCount = getGitCommitCount()
+
+// Calcular versionCode: major * 10000 + minor * 100 + gitCommitCount
+def generatedVersionCode = majorVersion * 10000 + minorVersion * 100 + gitCommitCount
+
+// Construir versionName no formato X.Y.Z (Patch = número de commits)
+def generatedVersionName = "${majorVersion}.${minorVersion}.${gitCommitCount}"
 
 android {
     namespace = "com.example.app"
