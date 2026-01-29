@@ -6,6 +6,7 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Textarea } from '../components/ui/Textarea';
 import { InjuryMap, Injury } from '../components/InjuryMap';
+import { saveProfileToSupabase } from '../lib/supabase';
 import { ArrowRight, ArrowLeft, Check, Sun, Dumbbell, Moon } from 'lucide-react';
 
 export const Onboarding: React.FC = () => {
@@ -54,7 +55,7 @@ export const Onboarding: React.FC = () => {
     if (step < 4) {
       setStep(step + 1);
     } else {
-      // Finalizar onboarding
+      // Finalizar onboarding (localStorage continua sendo usado normalmente)
       const data: OnboardingData = {
         biometrics,
         restrictions,
@@ -64,6 +65,13 @@ export const Onboarding: React.FC = () => {
       setOnboardingData(data);
       const plan = generatePlan(data);
       setPlan(plan);
+      // Enviar perfil para a nuvem (camada extra de segurança; não substitui o local)
+      saveProfileToSupabase({
+        name: '',
+        biotype: data.biometrics.biotype ?? '',
+        objective: data.goals.primary,
+        calories: plan.weeks[0]?.totalCalories ?? 0,
+      }).catch(() => {});
     }
   };
 

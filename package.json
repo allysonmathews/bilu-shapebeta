@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.0.1",
+    "@supabase/supabase-js": "^2.47.10",
     "@expo/metro-runtime": "~6.1.2",
     "expo": "^54.0.32",
     "lucide-react": "^0.294.0",
