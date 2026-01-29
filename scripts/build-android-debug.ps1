@@ -113,16 +113,58 @@ try {
     Write-Host "=== Build concluido com sucesso! ===" -ForegroundColor Green
     Write-Host ""
     
-    # Mostrar localização do APK
-    $apkPath = Join-Path $appDir "build\outputs\apk\debug"
-    if (Test-Path $apkPath) {
-        $apkFiles = Get-ChildItem -Path $apkPath -Filter "*.apk"
+    # Capturar e mover APK para pasta releases
+    $apkSourcePath = Join-Path $appDir "build\outputs\apk\debug"
+    $releasesDir = Join-Path $root "releases"
+    
+    if (Test-Path $apkSourcePath) {
+        $apkFiles = Get-ChildItem -Path $apkSourcePath -Filter "BiluShape-*.apk"
+        
         if ($apkFiles) {
-            Write-Host "APK gerado em:" -ForegroundColor Cyan
-            foreach ($apk in $apkFiles) {
-                Write-Host "  $($apk.FullName)" -ForegroundColor White
+            # Criar pasta releases se não existir
+            if (-not (Test-Path $releasesDir)) {
+                New-Item -ItemType Directory -Path $releasesDir -Force | Out-Null
+                Write-Host "Pasta releases criada." -ForegroundColor Green
             }
+            
+            foreach ($apk in $apkFiles) {
+                # Extrair versão do nome do arquivo (ex: BiluShape-v1.1.21.apk -> 1.1.21)
+                $versionMatch = $apk.Name -match "BiluShape-v(.+)\.apk"
+                if ($versionMatch) {
+                    $version = $matches[1]
+                    $targetFileName = "BiluShape-v${version}.apk"
+                    $targetPath = Join-Path $releasesDir $targetFileName
+                    
+                    # Remover APK antigo da mesma versão se existir
+                    if (Test-Path $targetPath) {
+                        Remove-Item $targetPath -Force
+                        Write-Host "APK anterior da versao ${version} removido." -ForegroundColor Yellow
+                    }
+                    
+                    # Copiar APK para releases
+                    Copy-Item $apk.FullName $targetPath -Force
+                    Write-Host ""
+                    Write-Host "APK movido com sucesso!" -ForegroundColor Green
+                    Write-Host "  Origem: $($apk.FullName)" -ForegroundColor Gray
+                    Write-Host "  Destino: $targetPath" -ForegroundColor Cyan
+                    Write-Host ""
+                    
+                    # Mostrar informações do APK
+                    $apkInfo = Get-Item $targetPath
+                    Write-Host "Informacoes do APK:" -ForegroundColor Cyan
+                    Write-Host "  Nome: $($apkInfo.Name)" -ForegroundColor White
+                    Write-Host "  Versao: ${version}" -ForegroundColor White
+                    Write-Host "  Tamanho: $([math]::Round($apkInfo.Length / 1MB, 2)) MB" -ForegroundColor White
+                    Write-Host ""
+                } else {
+                    Write-Host "AVISO: Nao foi possivel extrair a versao do arquivo $($apk.Name)" -ForegroundColor Yellow
+                }
+            }
+        } else {
+            Write-Host "AVISO: Nenhum APK encontrado em $apkSourcePath" -ForegroundColor Yellow
         }
+    } else {
+        Write-Host "ERRO: Pasta de build nao encontrada: $apkSourcePath" -ForegroundColor Red
     }
 } finally {
     Pop-Location

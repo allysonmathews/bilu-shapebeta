@@ -28,3 +28,6 @@ android/app/debug.keystore
 android/.gradle
 android/app/build
 android/build
+
+# Releases - manter apenas os APKs na pasta releases
+# releases/*.apk está sendo rastreado pelo Git

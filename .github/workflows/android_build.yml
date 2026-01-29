@@ -67,11 +67,36 @@ jobs:
         working-directory: ./android
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleRelease
+          ./gradlew clean assembleDebug
+      
+      - name: Criar pasta releases
+        run: mkdir -p releases
+      
+      - name: Mover APK para pasta releases
+        run: |
+          APK_FILE=$(find android/app/build/outputs/apk/debug -name "BiluShape-*.apk" | head -n 1)
+          if [ -n "$APK_FILE" ]; then
+            cp "$APK_FILE" releases/
+            echo "APK movido para releases/"
+            ls -lh releases/
+          else
+            echo "ERRO: APK não encontrado"
+            exit 1
+          fi
       
       - name: Fazer upload do APK
         uses: actions/upload-artifact@v4
         with:
-          name: BiluShape-Release
-          path: android/app/build/outputs/apk/release/*.apk
+          name: BiluShape-Debug-APK
+          path: releases/*.apk
           retention-days: 30
+      
+      - name: Commit APK (opcional - descomente para commit automático)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add releases/*.apk
+          git diff --staged --quiet || git commit -m "chore: adicionar APK de debug via CI/CD [skip ci]"
+          git push || echo "Push falhou ou não há alterações"
+        continue-on-error: true

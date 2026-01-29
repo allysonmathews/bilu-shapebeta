@@ -11,7 +11,9 @@
     "android:icons": "powershell -ExecutionPolicy Bypass -File scripts/generate-android-icons.ps1",
     "android:build": "powershell -ExecutionPolicy Bypass -File scripts/build-android-debug.ps1",
     "android:clean": "cd android && gradlew clean",
-    "android:assemble": "cd android && gradlew assembleDebug"
+    "android:assemble": "cd android && gradlew assembleDebug",
+    "android:commit": "powershell -ExecutionPolicy Bypass -File scripts/commit-release.ps1",
+    "android:build-commit": "powershell -ExecutionPolicy Bypass -File scripts/build-and-commit.ps1"
   },
   "dependencies": {
     "@capacitor/android": "^8.0.1",
