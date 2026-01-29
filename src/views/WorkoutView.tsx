@@ -14,7 +14,7 @@ import { translateMuscleGroup } from '../utils/muscleGroupTranslations';
 export const WorkoutView: React.FC = () => {
   const { plan, onboardingData, updateExerciseProgress, setPlan } = useUser();
   const { swapExercise, generatePlan } = usePlan();
-  const { saveWeight, finishWorkout, getWorkoutByDate, workoutHistory } = useProgress();
+  const { saveWeight, finishWorkout, getWorkoutByDate, workoutHistory, weightHistory } = useProgress();
   
   // Auto-seed: Gerar plano padrão se não houver plano e houver onboardingData
   useEffect(() => {
@@ -248,6 +248,60 @@ export const WorkoutView: React.FC = () => {
 
     return { workout, weekIndex: foundWeekIndex, workoutIndex, dayNumber: expectedDayNumber };
   }, [plan, selectedDate]);
+
+  // Memorizar mapeamento nome -> id dos exercícios do treino atual para uso no efeito de sincronização
+  const exerciseNameToIdMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (workoutData?.workout?.exercises) {
+      workoutData.workout.exercises
+        .filter(ex => ex != null && ex.name && ex.id)
+        .forEach(ex => {
+          map[ex.name!] = ex.id!;
+        });
+    }
+    return map;
+  }, [workoutData?.workout?.exercises]);
+
+  // SINCRONIZAÇÃO DE DATA: Carregar pesos e estados do contexto ao mudar de data
+  useEffect(() => {
+    // Buscar dados do histórico de treino para a data selecionada
+    const workoutForDate = getWorkoutByDate(selectedDate);
+    
+    // Buscar pesos do weightHistory para a data selecionada
+    const weightsForDate: Record<string, number> = {};
+    const doneForDate: Record<string, boolean> = {};
+    
+    // Primeiro, popular com dados do weightHistory (mais granular, por exerciseId)
+    weightHistory
+      .filter(log => log.date === selectedDate)
+      .forEach(log => {
+        weightsForDate[log.exerciseId] = log.weight;
+      });
+    
+    // Se houver histórico de treino completo, usar os dados dele também
+    // para carregar o estado "done" e pesos por nome do exercício
+    if (workoutForDate && workoutForDate.exercises) {
+      workoutForDate.exercises.forEach((ex) => {
+        // Usar o mapeamento nome -> id para encontrar o exercício correto
+        const exerciseId = exerciseNameToIdMap[ex.name];
+        if (exerciseId) {
+          // Só sobrescrever peso se não tiver no weightHistory ou se o histórico tiver valor
+          if (ex.weight > 0 && !weightsForDate[exerciseId]) {
+            weightsForDate[exerciseId] = ex.weight;
+          }
+          doneForDate[exerciseId] = ex.done;
+        }
+      });
+    }
+    
+    // Atualizar estados locais com os dados do contexto
+    // Isso garante que a UI reflita corretamente o estado salvo
+    setExerciseWeights(weightsForDate);
+    setExerciseDone(doneForDate);
+    setLastSavedWeights(weightsForDate);
+    setSavedExercises(new Set());
+    setIsEditing(false);
+  }, [selectedDate, exerciseNameToIdMap, weightHistory, getWorkoutByDate]); // Dependências: selectedDate, mapeamento de exercícios e dados do contexto
 
   const handleSwap = useCallback(
     (exerciseId: string, displayIndex: number) => {
