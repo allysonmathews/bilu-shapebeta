@@ -1,17 +1,27 @@
 apply plugin: 'com.android.application'
 
-// Função para gerar versionCode baseado no timestamp
-def getVersionCode() {
-    def date = new Date()
-    def formattedDate = date.format('yyMMddHHmm', TimeZone.getTimeZone('UTC'))
-    return Integer.parseInt(formattedDate)
+// Função para obter o número total de commits do Git
+def getGitCommitCount() {
+    try {
+        def process = "git rev-list --count HEAD".execute()
+        process.waitFor()
+        def count = process.text.trim()
+        return count ? Integer.parseInt(count) : 1
+    } catch (Exception e) {
+        return 1
+    }
 }
 
-// Função para gerar versionName baseado no timestamp (formato: 1.0.YYMMDD)
-def getVersionName() {
-    def date = new Date()
-    def formattedDate = date.format('yyMMdd', TimeZone.getTimeZone('UTC'))
-    return "1.0.${formattedDate}"
+// Função para obter o hash curto do último commit do Git
+def getGitCommitHash() {
+    try {
+        def process = "git rev-parse --short HEAD".execute()
+        process.waitFor()
+        def hash = process.text.trim()
+        return hash ? hash : "dev"
+    } catch (Exception e) {
+        return "dev"
+    }
 }
 
 android {
@@ -21,8 +31,8 @@ android {
         applicationId "com.example.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode getVersionCode()
-        versionName getVersionName()
+        versionCode getGitCommitCount()
+        versionName "1.0.${getGitCommitCount()}-${getGitCommitHash()}"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
