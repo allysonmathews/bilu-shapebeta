@@ -10,6 +10,7 @@ import {
   type WorkoutStructure,
   type Goal as WorkoutGoal,
 } from '../logic/workoutGenerator';
+import { processMealsForDay } from '../logic/dietGenerator';
 
 interface PlanContextType {
   generatePlan: (data: OnboardingData) => FourWeekPlan;
@@ -733,7 +734,12 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       });
     });
 
-    return meals;
+    // Ordenação por hora (HH:mm) e nomenclatura inteligente (faixa + Pré/Pós-Treino)
+    return processMealsForDay(
+      meals,
+      preferences.workoutTime,
+      preferences.workoutDuration
+    );
   };
 
   // Gerar refeições para todos os dias da semana
@@ -1509,7 +1515,8 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (mealName === 'Desjejum') return 'desjejum';
       if (mealName === 'Café da Manhã') return 'cafe';
       if (mealName === 'Almoço') return 'almoco';
-      if (mealName === 'Lanche da Tarde') return 'lanche_tarde';
+      if (mealName === 'Lanche da Tarde' || mealName === 'Lanche da Tarde I' || mealName === 'Lanche da Tarde II') return 'lanche_tarde';
+      if (mealName === 'Pré-Treino') return 'lanche_tarde';
       if (mealName === 'Pós-Treino') return 'pos_treino';
       if (mealName === 'Janta' || mealName === 'Jantar') return 'janta';
       if (mealName === 'Ceia') return 'ceia';
