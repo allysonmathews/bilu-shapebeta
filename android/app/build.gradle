@@ -36,6 +36,15 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+
+    // Configuração para renomear o APK de saída
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            def versionName = variant.versionName
+            def fileName = "BiluShape-v${versionName}.apk"
+            outputFileName = fileName
+        }
+    }
 }
 
 repositories {
