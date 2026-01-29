@@ -31,14 +31,53 @@ export interface ProfilePayload {
   calories: number;
 }
 
+/** Perfil retornado do Supabase (para verificar se usuário já é aluno). */
+export interface ProfileRow {
+  id: string;
+  client_id: string;
+  name: string | null;
+  biotype: string;
+  objective: string;
+  calories: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/**
+ * Busca perfil na tabela profiles pelo ID do usuário logado (client_id = userId do Auth).
+ * Usado para saber se o usuário já concluiu onboarding em outro dispositivo.
+ */
+export async function getProfileByUserId(userId: string): Promise<ProfileRow | null> {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, client_id, name, biotype, objective, calories, created_at, updated_at')
+      .eq('client_id', userId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('[Supabase] Erro ao buscar perfil:', error.message);
+      return null;
+    }
+    return data as ProfileRow | null;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[Supabase] Exceção ao buscar perfil:', message);
+    return null;
+  }
+}
+
 /**
  * Salva ou atualiza o perfil do usuário no Supabase.
- * Usa client_id (localStorage) para identificar o mesmo dispositivo; não remove dados locais.
- * Tabela esperada: profiles (id uuid, client_id text unique, name text, biotype text, objective text, calories int, created_at, updated_at).
+ * Se userId (Auth) for passado, usa como client_id (um perfil por usuário logado).
+ * Caso contrário usa client_id do localStorage (dispositivo).
  */
-export async function saveProfileToSupabase(payload: ProfilePayload): Promise<{ ok: boolean; error?: string }> {
+export async function saveProfileToSupabase(
+  payload: ProfilePayload,
+  userId?: string
+): Promise<{ ok: boolean; error?: string }> {
   try {
-    const clientId = getOrCreateClientId();
+    const clientId = userId ?? getOrCreateClientId();
     const now = new Date().toISOString();
 
     const row = {

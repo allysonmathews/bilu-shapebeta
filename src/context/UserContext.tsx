@@ -1,6 +1,6 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { User, OnboardingData, FourWeekPlan, ProgressEntry, ExerciseProgress } from '../types';
-import { usePlan } from './PlanContext';
+import { supabase, getProfileByUserId, type ProfileRow } from '../lib/supabase';
 
 // localStorage: bilu_user, bilu_onboarding, bilu_plan, bilu_progress, bilu_exercise_progress, bilu_completed_meals
 // Estrutura para rastrear refeições completadas por data
@@ -10,6 +10,12 @@ interface CompletedMeals {
 
 interface UserContextType {
   user: User;
+  authLoading: boolean;
+  /** Enquanto true, está verificando na tabela profiles se o usuário já tem perfil (evitar repetir onboarding). */
+  profileCheckLoading: boolean;
+  /** Perfil encontrado no Supabase (null = não tem ou incompleto; undefined = ainda não verificou). */
+  profileCheckResult: ProfileRow | null | undefined;
+  clearProfileCheckResult: () => void;
   onboardingData: OnboardingData | null;
   plan: FourWeekPlan | null;
   progress: ProgressEntry[];
@@ -21,7 +27,6 @@ interface UserContextType {
   addProgressEntry: (entry: ProgressEntry) => void;
   updateExerciseProgress: (exerciseId: string, exerciseName: string, date: string, sets: number, reps: number, weight: number) => void;
   toggleMealCompletion: (date: string, mealId: string) => void;
-  login: () => void;
   logout: () => void;
 }
 
@@ -39,6 +44,11 @@ const USER_STORAGE_KEYS = [
 ] as const;
 
 export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [authLoading, setAuthLoading] = useState(true);
+  const [profileCheckLoading, setProfileCheckLoading] = useState(false);
+  const [profileCheckResult, setProfileCheckResult] = useState<ProfileRow | null | undefined>(undefined);
+  const profileCheckDoneRef = useRef(false);
+
   const [user, setUserState] = useState<User>(() => {
     const stored = localStorage.getItem('bilu_user');
     return stored ? JSON.parse(stored) : { isAuthenticated: false, onboardingCompleted: false };
@@ -185,25 +195,92 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     });
   };
 
-  const login = () => {
-    setUserState({ isAuthenticated: true, onboardingCompleted: user.onboardingCompleted });
-  };
+  const clearProfileCheckResult = useCallback(() => {
+    setProfileCheckResult(undefined);
+    profileCheckDoneRef.current = true;
+  }, []);
 
-  const logout = () => {
+  const clearUserData = useCallback(() => {
     setUserState({ isAuthenticated: false, onboardingCompleted: false });
     setOnboardingDataState(null);
     setPlanState(null);
     setProgress([]);
     setExerciseProgress([]);
     setCompletedMeals({});
-    // Limpar apenas chaves do UserContext; preservar bilu_weight_history e bilu_workout_history (ProgressContext)
+    setProfileCheckResult(undefined);
+    setProfileCheckLoading(false);
+    profileCheckDoneRef.current = false;
     USER_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
-  };
+  }, []);
+
+  const logout = useCallback(async () => {
+    await supabase.auth.signOut();
+    clearUserData();
+  }, [clearUserData]);
+
+  // Supabase Auth: sessão inicial + listener
+  useEffect(() => {
+    let mounted = true;
+
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!mounted) return;
+      if (session) {
+        setUserState((prev) => ({ ...prev, isAuthenticated: true }));
+      } else {
+        setUserState((prev) => ({ ...prev, isAuthenticated: false }));
+      }
+      setAuthLoading(false);
+    };
+
+    init();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+      if (session) {
+        setUserState((prev) => ({ ...prev, isAuthenticated: true }));
+      } else {
+        clearUserData();
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [clearUserData]);
+
+  // Verificar na tabela profiles se o usuário já tem perfil (evitar repetir onboarding em novo dispositivo)
+  useEffect(() => {
+    if (authLoading || !user.isAuthenticated || onboardingData !== null || profileCheckDoneRef.current) {
+      return;
+    }
+    let cancelled = false;
+    setProfileCheckLoading(true);
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled || !session) {
+        setProfileCheckLoading(false);
+        return;
+      }
+      const profile = await getProfileByUserId(session.user.id);
+      if (cancelled) return;
+      setProfileCheckResult(profile ?? null);
+      setProfileCheckLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, user.isAuthenticated, onboardingData]);
 
   return (
     <UserContext.Provider
       value={{
         user,
+        authLoading,
+        profileCheckLoading,
+        profileCheckResult,
+        clearProfileCheckResult,
         onboardingData,
         plan,
         progress,
@@ -215,7 +292,6 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         addProgressEntry,
         updateExerciseProgress,
         toggleMealCompletion,
-        login,
         logout,
       }}
     >

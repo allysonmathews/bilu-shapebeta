@@ -3,6 +3,8 @@
 export interface User {
   isAuthenticated: boolean;
   onboardingCompleted: boolean;
+  /** Nome ou apelido para saudação (ex: "Bora treinar, [Nome]!") */
+  displayName?: string;
 }
 
 export interface Biometrics {

@@ -51,7 +51,8 @@ const getTodayDateString = (): string => {
 };
 
 export const DailyJournal: React.FC = () => {
-  const { plan, onboardingData, completedMeals, toggleMealCompletion } = useUser();
+  const { user, plan, onboardingData, completedMeals, toggleMealCompletion } = useUser();
+  const displayName = user?.displayName?.trim() || 'Bilu';
   const [waterGlasses, setWaterGlasses] = useState(0);
   const [completedWorkout, setCompletedWorkout] = useState(false);
 
@@ -136,8 +137,10 @@ export const DailyJournal: React.FC = () => {
 
   return (
     <div className="p-4 pb-24 space-y-4">
-      <div className="text-center mb-6">
-        <h1 className="text-2xl font-bold text-alien-green mb-2">Seu Diário</h1>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-alien-green mb-1">
+          Bora treinar, {displayName}! 👽
+        </h1>
         <p className="text-gray-400">{dayName}</p>
       </div>
 

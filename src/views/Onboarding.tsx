@@ -6,13 +6,16 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Textarea } from '../components/ui/Textarea';
 import { InjuryMap, Injury } from '../components/InjuryMap';
-import { saveProfileToSupabase } from '../lib/supabase';
+import { supabase, saveProfileToSupabase } from '../lib/supabase';
 import { ArrowRight, ArrowLeft, Check, Sun, Dumbbell, Moon } from 'lucide-react';
 
+const TOTAL_STEPS = 5;
+
 export const Onboarding: React.FC = () => {
-  const { setOnboardingData, setPlan } = useUser();
+  const { user, setOnboardingData, setPlan, setUser } = useUser();
   const { generatePlan } = usePlan();
   const [step, setStep] = useState(1);
+  const [userName, setUserName] = useState('');
   const [biometrics, setBiometrics] = useState<Biometrics>({
     weight: 70,
     height: 170,
@@ -45,17 +48,18 @@ export const Onboarding: React.FC = () => {
   const COMMON_RESTRICTIONS = ["Glúten", "Lactose", "Amendoim", "Ovo", "Soja", "Frutos do Mar", "Peixe", "Nozes", "Leite", "Crustáceos", "Trigo", "Vegano", "Vegetariano", "Carne de Porco"];
 
   const handleNext = () => {
-    // Validação para Step 3 - campos de hora obrigatórios
-    if (step === 3) {
+    // Validação para Step 1 - nome (opcional; se vazio usamos "Bilu")
+    // Validação para Step 4 - campos de hora obrigatórios
+    if (step === 4) {
       if (!preferences.wakeTime || !preferences.workoutTime || !preferences.sleepTime) {
-        return; // Não avança se algum campo estiver vazio
+        return;
       }
     }
 
-    if (step < 4) {
+    if (step < TOTAL_STEPS) {
       setStep(step + 1);
     } else {
-      // Finalizar onboarding (localStorage continua sendo usado normalmente)
+      const displayName = userName.trim() || 'Bilu';
       const data: OnboardingData = {
         biometrics,
         restrictions,
@@ -63,15 +67,21 @@ export const Onboarding: React.FC = () => {
         preferences,
       };
       setOnboardingData(data);
+      setUser({ ...user, onboardingCompleted: true, displayName });
       const plan = generatePlan(data);
       setPlan(plan);
-      // Enviar perfil para a nuvem (camada extra de segurança; não substitui o local)
-      saveProfileToSupabase({
-        name: '',
-        biotype: data.biometrics.biotype ?? '',
-        objective: data.goals.primary,
-        calories: plan.weeks[0]?.totalCalories ?? 0,
-      }).catch(() => {});
+      (async () => {
+        const { data: { session } } = await supabase.auth.getSession();
+        await saveProfileToSupabase(
+          {
+            name: displayName,
+            biotype: data.biometrics.biotype ?? '',
+            objective: data.goals.primary,
+            calories: plan.weeks[0]?.totalCalories ?? 0,
+          },
+          session?.user?.id
+        );
+      })().catch(() => {});
     }
   };
 
@@ -180,19 +190,39 @@ export const Onboarding: React.FC = () => {
         {/* Progress Bar */}
         <div className="mb-6">
           <div className="flex justify-between text-sm text-gray-400 mb-2">
-            <span>Passo {step} de 4</span>
-            <span>{Math.round((step / 4) * 100)}%</span>
+            <span>Passo {step} de {TOTAL_STEPS}</span>
+            <span>{Math.round((step / TOTAL_STEPS) * 100)}%</span>
           </div>
           <div className="w-full bg-card-bg h-2 rounded-full overflow-hidden">
             <div
               className="h-full bg-alien-green transition-all duration-300"
-              style={{ width: `${(step / 4) * 100}%` }}
+              style={{ width: `${(step / TOTAL_STEPS) * 100}%` }}
             />
           </div>
         </div>
 
-        {/* Step 1: Biometrics */}
+        {/* Step 1: Nome / Como gostaria de ser chamado */}
         {step === 1 && (
+          <div className="space-y-6">
+            <h2 className="text-2xl font-bold text-alien-green mb-4">Como você gostaria de ser chamado?</h2>
+            <p className="text-gray-400 mb-4">Digite seu nome ou apelido. Usaremos na sua saudação no app.</p>
+            <Input
+              label="Seu nome ou apelido"
+              type="text"
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+              placeholder="Ex: Maria, Zé, Bilu..."
+              className="
+                border-alien-green/50 focus:border-alien-green
+                shadow-[0_0_20px_rgba(57,255,20,0.15)] focus:shadow-[0_0_24px_rgba(57,255,20,0.25)]
+                placeholder-gray-500
+              "
+            />
+          </div>
+        )}
+
+        {/* Step 2: Biometrics */}
+        {step === 2 && (
           <div className="space-y-4">
             <h2 className="text-2xl font-bold text-alien-green mb-4">Seus Dados Corporais</h2>
             
@@ -285,8 +315,8 @@ export const Onboarding: React.FC = () => {
           </div>
         )}
 
-        {/* Step 2: Restrictions */}
-        {step === 2 && (
+        {/* Step 3: Restrictions */}
+        {step === 3 && (
           <div className="space-y-4">
             <h2 className="text-2xl font-bold text-alien-green mb-4">Restrições</h2>
             
@@ -369,8 +399,8 @@ export const Onboarding: React.FC = () => {
           </div>
         )}
 
-        {/* Step 3: Goals */}
-        {step === 3 && (
+        {/* Step 4: Goals */}
+        {step === 4 && (
           <div className="space-y-6">
             <h2 className="text-2xl font-bold text-alien-green mb-4">Seus Objetivos</h2>
             
@@ -463,8 +493,8 @@ export const Onboarding: React.FC = () => {
           </div>
         )}
 
-        {/* Step 4: Preferences */}
-        {step === 4 && (
+        {/* Step 5: Preferences */}
+        {step === 5 && (
           <div className="space-y-4">
             <h2 className="text-2xl font-bold text-alien-green mb-4">Preferências</h2>
             
@@ -523,12 +553,12 @@ export const Onboarding: React.FC = () => {
           )}
           <Button
             variant="primary"
-            icon={step === 4 ? Check : ArrowRight}
+            icon={step === TOTAL_STEPS ? Check : ArrowRight}
             onClick={handleNext}
             className="flex-1"
-            disabled={step === 3 && (!preferences.wakeTime || !preferences.workoutTime || !preferences.sleepTime)}
+            disabled={step === 4 && (!preferences.wakeTime || !preferences.workoutTime || !preferences.sleepTime)}
           >
-            {step === 4 ? 'Finalizar' : 'Próximo'}
+            {step === TOTAL_STEPS ? 'Finalizar' : 'Próximo'}
           </Button>
         </div>
       </div>
