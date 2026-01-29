@@ -16,7 +16,7 @@ def minorVersion = Integer.parseInt(versionProperties['VERSION_MINOR'] ?: '0')
 def patchVersion = Integer.parseInt(versionProperties['VERSION_PATCH'] ?: '0')
 
 // Calcular versionCode automaticamente: major * 10000 + minor * 100 + patch
-def versionCode = majorVersion * 10000 + minorVersion * 100 + patchVersion
+def generatedVersionCode = majorVersion * 10000 + minorVersion * 100 + patchVersion
 
 // Construir versionName no formato X.Y.Z
 def versionName = "${majorVersion}.${minorVersion}.${patchVersion}"
@@ -49,7 +49,7 @@ android {
         applicationId "com.example.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode versionCode
+        versionCode generatedVersionCode
         versionName versionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
