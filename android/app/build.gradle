@@ -9,26 +9,13 @@ def getGitCommitCount() {
     try {
         def stdout = new ByteArrayOutputStream()
         exec {
-            // Isso força o comando a rodar na pasta raiz (onde está o .git)
-            workingDir ".." 
+            workingDir "../" 
             commandLine 'git', 'rev-list', '--count', 'HEAD'
             standardOutput = stdout
         }
         return Integer.parseInt(stdout.toString().trim())
     } catch (Exception e) {
         return 1
-    }
-}
-
-// Função para obter o hash curto do último commit do Git
-def getGitCommitHash() {
-    try {
-        def process = "git rev-parse --short HEAD".execute()
-        process.waitFor()
-        def hash = process.text.trim()
-        return hash ? hash : "dev"
-    } catch (Exception e) {
-        return "dev"
     }
 }
 
