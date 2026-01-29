@@ -1,6 +1,15 @@
 import React, { createContext, useContext, ReactNode } from 'react';
-import { OnboardingData, FourWeekPlan, WeeklyPlan, Meal, WorkoutDay, DailyMeals, DayOfWeek } from '../types';
+import { OnboardingData, FourWeekPlan, WeeklyPlan, Meal, WorkoutDay, DailyMeals, DayOfWeek, Preferences } from '../types';
 import { mockFoods, mockExercises, Food, Exercise, findSimilarFood, MealTime, MuscleGroup, JointGroup } from '../data/mockDatabase';
+import {
+  calculateWorkoutStructure,
+  getSplitConfig,
+  violatesSynergy,
+  getRepsForExercise,
+  type SplitType,
+  type WorkoutStructure,
+  type Goal as WorkoutGoal,
+} from '../logic/workoutGenerator';
 
 interface PlanContextType {
   generatePlan: (data: OnboardingData) => FourWeekPlan;
@@ -873,62 +882,19 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     });
 
     // ============================================
-    // STEP 2: DETERMINAR O SPLIT (Frequency Logic)
+    // ESTRUTURA DO TREINO (Objetivo + Dias + Duração)
     // ============================================
-    type SplitType = 'full_body' | 'full_body_focus_a' | 'full_body_focus_b' | 'full_body_focus_c' | 
-                     'upper' | 'lower' | 'push' | 'pull' | 'legs' | 
-                     'chest_triceps' | 'back_biceps' | 'shoulders_traps' | 'legs_complete' |
-                     'push_ppl' | 'pull_ppl' | 'legs_ppl' |
-                     'chest' | 'back' | 'shoulders_abs' | 'arms';
+    const structure: WorkoutStructure = calculateWorkoutStructure(
+      goal as WorkoutGoal,
+      daysPerWeek,
+      timePerWorkout
+    );
 
-    let split: SplitType[];
-    let workoutDays: number[]; // Dias da semana que terão treino (1-7, onde 1=Segunda, 7=Domingo)
-
-    // REGRAS DE DISTRIBUIÇÃO SEMANAL:
-    // - Semana sempre começa na Segunda-feira (1)
-    // - Prioridade: Segunda a Sexta (dias úteis)
-    // - Sábado (6) só tem treino se daysPerWeek >= 6
-    // - Domingo (7) só tem treino se daysPerWeek === 7
-    // - Sábado e Domingo são descanso por padrão
-
-    if (daysPerWeek >= 1 && daysPerWeek <= 2) {
-      // 1-2 dias: Full Body (Corpo Inteiro)
-      split = Array(daysPerWeek).fill('full_body') as SplitType[];
-      workoutDays = daysPerWeek === 1 ? [1] : [1, 4]; // Seg ou Seg, Qui
-    } else if (daysPerWeek === 3) {
-      // 3 dias: PPL (Push, Pull, Legs) - Agonistas e Sinergistas
-      // Distribuição: Segunda, Quarta, Sexta (Terça, Quinta, Sábado, Domingo = Descanso)
-      split = ['push_ppl', 'pull_ppl', 'legs_ppl'];
-      workoutDays = [1, 3, 5]; // Seg, Qua, Sex
-    } else if (daysPerWeek === 4) {
-      // 4 dias: Agonistas e Sinergistas (Fisiologicamente correto)
-      // Dia 1: Peito (Agonista) + Tríceps (Sinergista)
-      // Dia 2: Costas (Agonista) + Bíceps (Sinergista)
-      // Dia 3: Ombros (Agonista) + Trapézio (Sinergista)
-      // Dia 4: Quadríceps (Agonista) + Posteriores (Sinergista) + Panturrilhas
-      // Distribuição: Segunda a Quinta (Sexta, Sábado, Domingo = Descanso)
-      split = ['chest_triceps', 'back_biceps', 'shoulders_traps', 'legs_complete'];
-      workoutDays = [1, 2, 3, 4]; // Seg, Ter, Qua, Qui
-    } else if (daysPerWeek === 5) {
-      // 5 dias: Body Part Split (Peito, Costas, Pernas, Ombros/Abs, Braços)
-      // Distribuição: Segunda a Sexta (Sábado, Domingo = Descanso)
-      split = ['chest', 'back', 'legs', 'shoulders_abs', 'arms'];
-      workoutDays = [1, 2, 3, 4, 5]; // Seg, Ter, Qua, Qui, Sex
-    } else if (daysPerWeek === 6) {
-      // 6 dias: Push / Pull / Legs (ABC x2)
-      // Distribuição: Segunda a Sábado (Domingo = Descanso)
-      split = ['push', 'pull', 'legs', 'push', 'pull', 'legs'];
-      workoutDays = [1, 2, 3, 4, 5, 6]; // Seg, Ter, Qua, Qui, Sex, Sáb
-    } else if (daysPerWeek === 7) {
-      // 7 dias: Push / Pull / Legs (ABC x2 + Push)
-      // Distribuição: Segunda a Domingo (todos os dias)
-      split = ['push', 'pull', 'legs', 'push', 'pull', 'legs', 'push'];
-      workoutDays = [1, 2, 3, 4, 5, 6, 7]; // Seg, Ter, Qua, Qui, Sex, Sáb, Dom
-    } else {
-      // Fallback: Full Body (1 dia)
-      split = ['full_body'];
-      workoutDays = [1]; // Segunda
-    }
+    // ============================================
+    // STEP 2: DETERMINAR O SPLIT (Frequency Logic)
+    // 5 dias: A(Peito), B(Costas), C(Pernas), D(Ombros), E(Braços) – sinergia respeitada
+    // ============================================
+    const { split, workoutDays } = getSplitConfig(daysPerWeek);
 
     // ============================================
     // STEP 3: FILTRO DE SEGURANÇA (LESÕES)
@@ -1032,46 +998,20 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // Outros splits (mantidos para compatibilidade)
       upper: ['chest', 'back', 'shoulders', 'biceps', 'triceps'],
       lower: ['quads', 'hamstrings', 'glutes', 'calves', 'abs'],
-      chest: ['chest', 'triceps'],
-      back: ['back', 'biceps'],
+      // 5 DIAS: A(Peito), B(Costas), C(Pernas), D(Ombros), E(Braços) – sem sinergista no mesmo dia
+      chest: ['chest'],
+      back: ['back'],
       shoulders_abs: ['shoulders', 'abs'],
       arms: ['biceps', 'triceps'],
     };
 
     // ============================================
-    // STEP 6: AJUSTE DE VOLUME (Duração)
+    // STEP 6 & 7: VOLUME E TEMPO (regra 10 min/exercício)
+    // structure.maxExercises = limite rígido; nunca exceder.
+    // structure.cardioMinutes = 10 para Perda de Peso, 0 caso contrário.
     // ============================================
-    let numberOfExercises: number;
-    if (timePerWorkout < 40) {
-      // < 40min: 4-5 exercícios essenciais (foco em compostos)
-      numberOfExercises = 4 + Math.floor(Math.random() * 2); // 4 ou 5
-    } else if (timePerWorkout > 60) {
-      // > 60min: 7-8 exercícios (compostos + isolados)
-      numberOfExercises = 7 + Math.floor(Math.random() * 2); // 7 ou 8
-    } else {
-      // 40-60min: 5-6 exercícios
-      numberOfExercises = 5 + Math.floor(Math.random() * 2); // 5 ou 6
-    }
-
-    // ============================================
-    // STEP 7: TIME BUDGETING (Goal & Duration Logic)
-    // ============================================
-    let strengthTime: number;
-    let cardioTime: number;
-
-    if (goal === 'weight_loss') {
-      strengthTime = Math.floor(timePerWorkout * 0.5);
-      cardioTime = timePerWorkout - strengthTime;
-    } else if (goal === 'hypertrophy' || goal === 'strength') {
-      strengthTime = Math.floor(timePerWorkout * 0.85);
-      cardioTime = 0;
-    } else if (goal === 'muscle_definition') {
-      strengthTime = Math.floor(timePerWorkout * 0.6);
-      cardioTime = timePerWorkout - strengthTime;
-    } else {
-      strengthTime = Math.floor(timePerWorkout * 0.5);
-      cardioTime = timePerWorkout - strengthTime;
-    }
+    const maxExercises = structure.maxExercises;
+    const cardioTime = structure.cardioMinutes;
 
     // ============================================
     // STEP 8: FUNÇÃO PARA SELECIONAR EXERCÍCIOS (COM AGONISTAS E SINERGISTAS)
@@ -1132,13 +1072,14 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
       // Se for configuração de Agonista/Sinergista
       if (Array.isArray(config)) {
-        // Split tradicional (sem distinção agonista/sinergista)
+        // Split tradicional: distribuir maxExercises entre grupos (regra 10 min/exercício)
         const targetMuscles = config;
+        const perGroup = Math.max(1, Math.floor(maxExercises / targetMuscles.length));
         targetMuscles.forEach(muscle => {
           currentDayMuscles.push(muscle);
           const exercises = selectExercisesForMuscleGroup(
             muscle,
-            numberOfExercises, // Usar número total dividido entre grupos
+            perGroup,
             dayIndex,
             usedExerciseIds,
             split[dayIndex] === 'full_body' || split[dayIndex].startsWith('full_body_focus')
@@ -1307,24 +1248,7 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         }
       }
 
-      // Registrar grupos musculares treinados neste dia
-      trainedMuscleGroupsByDay[dayIndex] = currentDayMuscles;
-
       return selectedExercises;
-    };
-
-    // Determinar reps baseado no objetivo
-    const getReps = (exercise: Exercise): number => {
-      if (goal === 'weight_loss' || goal === 'muscle_definition') {
-        return 12 + Math.floor(Math.random() * 4); // 12-15 reps
-      } else if (goal === 'hypertrophy' || goal === 'strength') {
-        if (exercise.isCompound) {
-          return 8 + Math.floor(Math.random() * 5); // 8-12 reps para compostos
-        }
-        return 10 + Math.floor(Math.random() * 5); // 10-15 reps para isolados
-      } else {
-        return 15 + Math.floor(Math.random() * 10); // 15-25 reps para endurance
-      }
     };
 
     // ============================================
@@ -1346,31 +1270,30 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       // Selecionar exercícios baseado na configuração (Agonista/Sinergista ou tradicional)
       let selectedExercises = selectExercises(muscleConfig, i, usedExerciseIds);
 
-      // Verificar e remover conflitos: se um grupo muscular foi treinado no dia anterior, 
-      // garantir que não seja treinado novamente (exceto para splits que intencionalmente repetem)
+      // Verificar e remover conflitos: treino no dia anterior + SINERGIA (anti-bug)
+      // Nunca Bíceps no dia seguinte a Costas, nem Tríceps no dia seguinte a Peito.
       if (previousDayMuscles.length > 0 && !['push', 'pull', 'legs'].includes(currentSplit)) {
-        // Filtrar exercícios que usam grupos musculares treinados no dia anterior
         selectedExercises = selectedExercises.filter(ex => {
           const muscleTrainedYesterday = previousDayMuscles.includes(ex.muscleGroup);
-          const secondaryTrainedYesterday = ex.secondaryMuscles?.some(m => previousDayMuscles.includes(m));
-          
-          // Permitir apenas se for um grupo sinergista secundário (não o principal)
-          if (muscleTrainedYesterday) {
-            // Se o grupo principal foi treinado ontem, não treinar hoje
-            return false;
-          }
-          
-          // Se apenas músculos secundários foram treinados, permitir (recuperação sinergista)
+          if (muscleTrainedYesterday) return false;
+          // Regra de sinergia: excluir Bíceps se Costas ontem, Tríceps se Peito ontem
+          if (violatesSynergy(ex.muscleGroup, previousDayMuscles)) return false;
           return true;
         });
       }
 
-      // Se não houver exercícios suficientes (para splits tradicionais), buscar de grupos musculares relacionados
-      // Para splits com Agonista/Sinergista, o volume já está definido, então só preencher se necessário
-      const isAgonistSynergistSplit = !Array.isArray(muscleConfig);
-      const minExercises = isAgonistSynergistSplit ? 5 : numberOfExercises; // Mínimo esperado para splits A/S
+      // Limite rígido: NUNCA exceder maxExercises (regra 10 min/exercício)
+      if (selectedExercises.length > maxExercises) {
+        selectedExercises = selectedExercises.slice(0, maxExercises);
+      }
 
-      while (selectedExercises.length < minExercises) {
+      // Atualizar grupos treinados com base nos exercícios finais (após filtro/slice)
+      trainedMuscleGroupsByDay[i] = [...new Set(selectedExercises.map(e => e.muscleGroup))];
+
+      const isAgonistSynergistSplit = !Array.isArray(muscleConfig);
+      const minExercises = Math.min(isAgonistSynergistSplit ? 5 : 6, maxExercises);
+
+      while (selectedExercises.length < minExercises && selectedExercises.length < maxExercises) {
         let foundNew = false;
 
         // Para pernas completas, garantir que temos todos os grupos
@@ -1387,7 +1310,7 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
               !usedExerciseIds.has(e.id) &&
               e.type !== 'cardio'
             );
-            if (legExercises.length > 0) {
+            if (legExercises.length > 0 && selectedExercises.length < maxExercises) {
               const seed = (week - 1) * 7 + i;
               const exercise = legExercises[seed % legExercises.length];
               selectedExercises.push(exercise);
@@ -1398,8 +1321,7 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           }
         }
 
-        // Se ainda não temos exercícios suficientes, buscar de grupos musculares secundários ou relacionados
-        if (!foundNew && selectedExercises.length < minExercises) {
+        if (!foundNew && selectedExercises.length < minExercises && selectedExercises.length < maxExercises) {
           // Determinar grupos musculares alvo baseado no split
           let targetMuscles: MuscleGroup[] = [];
           if (Array.isArray(muscleConfig)) {
@@ -1419,10 +1341,11 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
                    !usedExerciseIds.has(e.id) && 
                    e.type !== 'cardio' &&
                    !selectedExercises.some(se => se.id === e.id) &&
-                   !wasTrainedYesterday; // Não treinar grupos do dia anterior
+                   !wasTrainedYesterday &&
+                   !violatesSynergy(e.muscleGroup, previousDayMuscles);
           });
 
-          if (relatedExercises.length > 0) {
+          if (relatedExercises.length > 0 && selectedExercises.length < maxExercises) {
             const seed = (week - 1) * 7 + i;
             const exercise = relatedExercises[seed % relatedExercises.length];
             selectedExercises.push(exercise);
@@ -1431,13 +1354,13 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           }
         }
 
-        // Se ainda não encontrou nada, buscar qualquer exercício seguro disponível (exceto os do dia anterior)
-        if (!foundNew && selectedExercises.length < minExercises) {
+        if (!foundNew && selectedExercises.length < minExercises && selectedExercises.length < maxExercises) {
           const availableExercises = safeExercises.filter(e => 
             !usedExerciseIds.has(e.id) && 
             e.type !== 'cardio' &&
             !selectedExercises.some(se => se.id === e.id) &&
-            !previousDayMuscles.includes(e.muscleGroup) // Não treinar grupos do dia anterior
+            !previousDayMuscles.includes(e.muscleGroup) &&
+            !violatesSynergy(e.muscleGroup, previousDayMuscles)
           );
 
           if (availableExercises.length > 0) {
@@ -1455,11 +1378,11 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         if (!foundNew) break;
       }
 
-      // Criar exercícios com sets e reps apropriados
-      const exercises = selectedExercises.map((ex) => {
-        const sets = goal === 'hypertrophy' || goal === 'strength' ? 4 : 3;
-        const reps = getReps(ex);
-        
+      // Criar exercícios com sets e reps da estrutura (Objetivo + Duração)
+      type WorkoutExercise = WorkoutDay['exercises'][number];
+      const exercises: WorkoutExercise[] = selectedExercises.map((ex) => {
+        const sets = structure.sets;
+        const reps = getRepsForExercise(structure, ex.isCompound ?? false);
         return {
           id: ex.id,
           name: ex.name,
@@ -1472,7 +1395,7 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         };
       });
 
-      // Se o plano requer Cardio, adicionar sessão de cardio genérica no final
+      // Se o plano requer Cardio (ex.: Perda de Peso +10 min ao final), adicionar sessão genérica
       if (cardioTime > 0) {
         exercises.push({
           id: `cardio-session-${week}-${dayOfWeek}`,
@@ -1491,7 +1414,7 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         day: dayNumber,
         week,
         exercises,
-        duration: timePerWorkout,
+        duration: structure.durationMinutes,
         completed: false,
       });
     }
@@ -1499,6 +1422,7 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return workouts;
   };
 
+  /** Gera plano do zero. Ao mudar Objetivo/Dias/Duração, o treino é sempre RECALCULADO (reset completo). */
   const generatePlan = (data: OnboardingData): FourWeekPlan => {
     const tdee = calculateTDEE(data);
     const startDate = new Date().toISOString();
@@ -1790,7 +1714,7 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return workouts;
   };
 
-  // Regenerar todos os planos (dieta + treino)
+  /** Regenera dieta e treino do zero (Reset Deep Copy). Usar ao mudar Objetivo no perfil. */
   const regenerateAllPlans = (profile: OnboardingData): FourWeekPlan => {
     const dietPlan = generateDietPlan(profile);
     const workoutPlan = generateWorkoutPlan(profile);
