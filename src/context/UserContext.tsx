@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { User, OnboardingData, FourWeekPlan, ProgressEntry, ExerciseProgress } from '../types';
 import { usePlan } from './PlanContext';
 
+// localStorage: bilu_user, bilu_onboarding, bilu_plan, bilu_progress, bilu_exercise_progress, bilu_completed_meals
 // Estrutura para rastrear refeições completadas por data
 interface CompletedMeals {
   [date: string]: Set<string>; // date format: YYYY-MM-DD, Set de meal IDs
@@ -25,6 +26,17 @@ interface UserContextType {
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined);
+
+// Chaves do localStorage que pertencem APENAS ao UserContext.
+// Não usar localStorage.clear() no logout para não apagar dados do ProgressContext.
+const USER_STORAGE_KEYS = [
+  'bilu_user',
+  'bilu_onboarding',
+  'bilu_plan',
+  'bilu_progress',
+  'bilu_exercise_progress',
+  'bilu_completed_meals',
+] as const;
 
 export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUserState] = useState<User>(() => {
@@ -184,7 +196,8 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setProgress([]);
     setExerciseProgress([]);
     setCompletedMeals({});
-    localStorage.clear();
+    // Limpar apenas chaves do UserContext; preservar bilu_weight_history e bilu_workout_history (ProgressContext)
+    USER_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
   };
 
   return (

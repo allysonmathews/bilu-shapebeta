@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 
+// localStorage: bilu_weight_history, bilu_workout_history (apenas este contexto; não são apagados no logout)
 // Estrutura do Log de histórico de cargas
 export interface WeightLog {
   id: string;
