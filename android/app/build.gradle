@@ -7,10 +7,14 @@ def minorVersion = 0
 // Função para obter o número total de commits do Git
 def getGitCommitCount() {
     try {
-        def process = "git rev-list --count HEAD".execute()
-        process.waitFor()
-        def count = process.text.trim()
-        return count ? Integer.parseInt(count) : 1
+        def stdout = new ByteArrayOutputStream()
+        exec {
+            // Isso força o comando a rodar na pasta raiz (onde está o .git)
+            workingDir ".." 
+            commandLine 'git', 'rev-list', '--count', 'HEAD'
+            standardOutput = stdout
+        }
+        return Integer.parseInt(stdout.toString().trim())
     } catch (Exception e) {
         return 1
     }
