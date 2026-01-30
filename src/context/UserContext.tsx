@@ -250,9 +250,9 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
   }, [clearUserData]);
 
-  // Verificar na tabela profiles se o usuário já tem perfil (evitar repetir onboarding em novo dispositivo)
+  // Assim que o login for detectado: buscar perfil na tabela profiles e atualizar estado (perfil completo = pular onboarding).
   useEffect(() => {
-    if (authLoading || !user.isAuthenticated || onboardingData !== null || profileCheckDoneRef.current) {
+    if (authLoading || !user.isAuthenticated || profileCheckDoneRef.current) {
       return;
     }
     let cancelled = false;
@@ -265,13 +265,20 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
       const profile = await getProfileByUserId(session.user.id);
       if (cancelled) return;
+      profileCheckDoneRef.current = true;
       setProfileCheckResult(profile ?? null);
       setProfileCheckLoading(false);
+      // Atualizar estado global: perfil existe = onboarding completo; vazio = mostrar onboarding.
+      if (profile) {
+        setUserState((prev) => ({ ...prev, onboardingCompleted: true }));
+      } else {
+        setUserState((prev) => ({ ...prev, onboardingCompleted: false }));
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user.isAuthenticated, onboardingData]);
+  }, [authLoading, user.isAuthenticated]);
 
   return (
     <UserContext.Provider

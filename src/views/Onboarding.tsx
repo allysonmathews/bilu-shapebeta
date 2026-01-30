@@ -44,10 +44,11 @@ export const Onboarding: React.FC = () => {
   const [allergyInput, setAllergyInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [filteredSuggestions, setFilteredSuggestions] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
 
   const COMMON_RESTRICTIONS = ["Glúten", "Lactose", "Amendoim", "Ovo", "Soja", "Frutos do Mar", "Peixe", "Nozes", "Leite", "Crustáceos", "Trigo", "Vegano", "Vegetariano", "Carne de Porco"];
 
-  const handleNext = () => {
+  const handleNext = async () => {
     // Validação para Step 1 - nome (opcional; se vazio usamos "Bilu")
     // Validação para Step 4 - campos de hora obrigatórios
     if (step === 4) {
@@ -58,30 +59,44 @@ export const Onboarding: React.FC = () => {
 
     if (step < TOTAL_STEPS) {
       setStep(step + 1);
-    } else {
-      const displayName = userName.trim() || 'Bilu';
-      const data: OnboardingData = {
-        biometrics,
-        restrictions,
-        goals,
-        preferences,
-      };
+      return;
+    }
+
+    const displayName = userName.trim() || 'Bilu';
+    const data: OnboardingData = {
+      biometrics,
+      restrictions,
+      goals,
+      preferences,
+    };
+    const plan = generatePlan(data);
+
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user?.id) {
+      console.log('[Onboarding] Perfil salvo: erro — usuário não logado (sem session.user.id)');
+      return;
+    }
+
+    setSaving(true);
+    const result = await saveProfileToSupabase(
+      {
+        name: displayName,
+        email: session.user.email ?? '',
+        biotype: data.biometrics.biotype ?? '',
+        objective: data.goals.primary,
+        calories: plan.weeks[0]?.totalCalories ?? 0,
+      },
+      session.user.id
+    );
+    setSaving(false);
+
+    if (result.ok) {
+      console.log('[Onboarding] Perfil salvo: sucesso');
       setOnboardingData(data);
       setUser({ ...user, onboardingCompleted: true, displayName });
-      const plan = generatePlan(data);
       setPlan(plan);
-      (async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        await saveProfileToSupabase(
-          {
-            name: displayName,
-            biotype: data.biometrics.biotype ?? '',
-            objective: data.goals.primary,
-            calories: plan.weeks[0]?.totalCalories ?? 0,
-          },
-          session?.user?.id
-        );
-      })().catch(() => {});
+    } else {
+      console.log('[Onboarding] Perfil salvo: erro', result.error);
     }
   };
 
@@ -556,9 +571,12 @@ export const Onboarding: React.FC = () => {
             icon={step === TOTAL_STEPS ? Check : ArrowRight}
             onClick={handleNext}
             className="flex-1"
-            disabled={step === 4 && (!preferences.wakeTime || !preferences.workoutTime || !preferences.sleepTime)}
+            disabled={
+              saving ||
+              (step === 4 && (!preferences.wakeTime || !preferences.workoutTime || !preferences.sleepTime))
+            }
           >
-            {step === TOTAL_STEPS ? 'Finalizar' : 'Próximo'}
+            {saving ? 'Salvando...' : step === TOTAL_STEPS ? 'Finalizar' : 'Próximo'}
           </Button>
         </div>
       </div>

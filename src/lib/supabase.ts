@@ -6,36 +6,20 @@ const SUPABASE_ANON_KEY = 'sb_publishable_fUN44y_IwArfw7L3wk3h3g_snErBzrY';
 /** Cliente Supabase (anon key para uso no frontend). */
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-/** Chave no localStorage para identificar o mesmo usuário/dispositivo na nuvem. */
-const CLIENT_ID_KEY = 'bilu_supabase_client_id';
-
-/** Gera ou recupera um ID único do cliente para upsert no Supabase. */
-function getOrCreateClientId(): string {
-  let id = typeof localStorage !== 'undefined' ? localStorage.getItem(CLIENT_ID_KEY) : null;
-  if (!id) {
-    id = `bilu_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
-    try {
-      localStorage.setItem(CLIENT_ID_KEY, id);
-    } catch {
-      // ignore
-    }
-  }
-  return id;
-}
-
-/** Dados do perfil para enviar ao Supabase (Nome, Biotipo, Objetivo, Calorias). */
+/** Dados do perfil para enviar ao Supabase (Nome, E-mail, Biotipo, Objetivo, Calorias). */
 export interface ProfilePayload {
   name?: string;
+  email?: string;
   biotype: string;
   objective: string;
   calories: number;
 }
 
-/** Perfil retornado do Supabase (para verificar se usuário já é aluno). */
+/** Perfil retornado do Supabase (para verificar se usuário já é aluno). id = UUID do usuário logado (Auth). */
 export interface ProfileRow {
   id: string;
-  client_id: string;
   name: string | null;
+  email: string | null;
   biotype: string;
   objective: string;
   calories: number;
@@ -44,15 +28,14 @@ export interface ProfileRow {
 }
 
 /**
- * Busca perfil na tabela profiles pelo ID do usuário logado (client_id = userId do Auth).
- * Usado para saber se o usuário já concluiu onboarding em outro dispositivo.
+ * Busca perfil na tabela profiles pelo ID do usuário logado (id = userId do Auth).
  */
 export async function getProfileByUserId(userId: string): Promise<ProfileRow | null> {
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, client_id, name, biotype, objective, calories, created_at, updated_at')
-      .eq('client_id', userId)
+      .select('id, name, email, biotype, objective, calories, created_at, updated_at')
+      .eq('id', userId)
       .maybeSingle();
 
     if (error) {
@@ -69,20 +52,19 @@ export async function getProfileByUserId(userId: string): Promise<ProfileRow | n
 
 /**
  * Salva ou atualiza o perfil do usuário no Supabase.
- * Se userId (Auth) for passado, usa como client_id (um perfil por usuário logado).
- * Caso contrário usa client_id do localStorage (dispositivo).
+ * Usa o user.id do Auth (UUID) como id do perfil — única forma de identificar o perfil.
  */
 export async function saveProfileToSupabase(
   payload: ProfilePayload,
-  userId?: string
+  userId: string
 ): Promise<{ ok: boolean; error?: string }> {
   try {
-    const clientId = userId ?? getOrCreateClientId();
     const now = new Date().toISOString();
 
     const row = {
-      client_id: clientId,
+      id: userId,
       name: payload.name ?? '',
+      email: payload.email ?? '',
       biotype: payload.biotype,
       objective: payload.objective,
       calories: payload.calories,
@@ -90,18 +72,58 @@ export async function saveProfileToSupabase(
     };
 
     const { error } = await supabase.from('profiles').upsert(row, {
-      onConflict: 'client_id',
+      onConflict: 'id',
       ignoreDuplicates: false,
     });
 
     if (error) {
-      console.warn('[Supabase] Erro ao salvar perfil:', error.message);
+      console.log('[Supabase] Perfil salvo: erro', error.message);
       return { ok: false, error: error.message };
     }
+    console.log('[Supabase] Perfil salvo: sucesso');
     return { ok: true };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    console.warn('[Supabase] Exceção ao salvar perfil:', message);
+    console.log('[Supabase] Perfil salvo: erro', message);
+    return { ok: false, error: message };
+  }
+}
+
+/**
+ * Salva um log de treino na nuvem (workout_history).
+ * Payload: user_id, exercise_name (obrigatório), exercise_id, weight, workout_date.
+ */
+export async function saveWorkoutLog(
+  exerciseName: string,
+  weight: number,
+  workoutDate: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user?.id) {
+      return { ok: false, error: 'Usuário não logado' };
+    }
+
+    const name = String(exerciseName ?? '').trim() || 'Exercício';
+    const row = {
+      user_id: session.user.id,
+      exercise_name: name,
+      exercise_id: name,
+      weight,
+      workout_date: workoutDate,
+    };
+
+    const { error } = await supabase.from('workout_history').insert(row);
+
+    if (error) {
+      console.warn('[Supabase] workout_history: erro', error.message);
+      return { ok: false, error: error.message };
+    }
+    console.log('Treino salvo na nuvem!');
+    return { ok: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[Supabase] workout_history: exceção', message);
     return { ok: false, error: message };
   }
 }

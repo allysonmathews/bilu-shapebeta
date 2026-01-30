@@ -7,6 +7,7 @@ import { SwapButton } from '../components/ui/SwapButton';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { ExerciseExecutionModal } from '../components/ExerciseExecutionModal';
+import { saveWorkoutLog } from '../lib/supabase';
 import { Check, Youtube, Calendar, Play } from 'lucide-react';
 import { WorkoutDay, DayOfWeek } from '../types';
 import { translateMuscleGroup } from '../utils/muscleGroupTranslations';
@@ -134,6 +135,18 @@ export const WorkoutView: React.FC = () => {
           saveWeight(exerciseId, weight, selectedDate);
         }
       });
+
+      // Enviar cada exercício com peso para o Supabase (workout_history)
+      (async () => {
+        if (!workoutData?.workout?.exercises) return;
+        for (const ex of workoutData.workout.exercises) {
+          if (!ex?.id || !ex?.name) continue;
+          const weight = exerciseWeights[ex.id];
+          if (weight && weight > 0) {
+            await saveWorkoutLog(ex.name, weight, selectedDate);
+          }
+        }
+      })();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEditing]);
@@ -371,7 +384,16 @@ export const WorkoutView: React.FC = () => {
       saveWeight(exerciseId, weight, selectedDate);
       setLastSavedWeights(prev => ({ ...prev, [exerciseId]: weight }));
       setSavedExercises(prev => new Set(prev).add(exerciseId));
-      
+
+      // Enviar para Supabase (workout_history) com ID do usuário logado
+      const exercise = workoutData?.workout?.exercises.find(e => e?.id === exerciseId);
+      const exerciseName = exercise?.name ?? 'Exercício';
+      (async () => {
+        if (weight > 0) {
+          await saveWorkoutLog(exerciseName, weight, selectedDate);
+        }
+      })();
+
       // Se estiver em modo de edição e for histórico, atualizar o workoutHistory também
       if (isEditing && historicalWorkout && workoutData?.workout?.id) {
         const exercisesData = displayExercises
@@ -408,6 +430,15 @@ export const WorkoutView: React.FC = () => {
 
     if (workoutData.workout.id) {
       finishWorkout(selectedDate, workoutData.workout.id, exercisesData);
+      (async () => {
+        for (const ex of workoutData.workout.exercises) {
+          if (!ex) continue;
+          const w = exerciseWeights[ex.id] ?? ex.weight ?? 0;
+          if (w > 0 && ex.name) {
+            await saveWorkoutLog(ex.name, w, selectedDate);
+          }
+        }
+      })();
       alert('Treino finalizado e salvo no histórico!');
     }
   };
@@ -419,6 +450,13 @@ export const WorkoutView: React.FC = () => {
         setLastSavedWeights(prev => ({ ...prev, [exerciseId]: weight }));
         setExerciseDone(prev => ({ ...prev, [exerciseId]: true }));
         setSavedExercises(prev => new Set(prev).add(exerciseId));
+
+        const exercise = workoutData?.workout?.exercises.find(e => e?.id === exerciseId);
+        const exerciseName = exercise?.name ?? 'Exercício';
+        (async () => {
+          await saveWorkoutLog(exerciseName, weight, selectedDate);
+        })();
+
         setTimeout(() => {
           setSavedExercises(prev => {
             const next = new Set(prev);
@@ -429,7 +467,7 @@ export const WorkoutView: React.FC = () => {
       }
       setExecutionModalExerciseId(null);
     },
-    [historicalWorkout, isFuture, saveWeight, selectedDate]
+    [historicalWorkout, isFuture, saveWeight, selectedDate, workoutData]
   );
 
   // Dados dos dias da semana - ORDEM VISUAL: Dom, Seg, Ter, Qua, Qui, Sex, Sáb
