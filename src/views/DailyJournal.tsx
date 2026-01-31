@@ -1,19 +1,21 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useUser } from '../context/UserContext';
 import { Card } from '../components/ui/Card';
-import { Check, Droplet, Utensils, Dumbbell, Camera, X, ImageIcon, Save } from 'lucide-react';
+import { Check, Droplet, Utensils, Dumbbell, Camera, X, ImageIcon } from 'lucide-react';
 import { DayOfWeek, WorkoutDay } from '../types';
 import { translateMuscleGroup } from '../utils/muscleGroupTranslations';
 import { NeonSpinner } from '../components/ui/NeonSpinner';
 import { supabase, getDietJournalEntries, saveDietJournalEntry, type DietJournalRow } from '../lib/supabase';
 
-/** Resultado da análise de prato pela IA (totais agregados dos alimentos) */
-interface MealAnalysisResult {
+/** Dados em revisão antes de salvar (editáveis no modal) - macros ocultos mas preservados no estado */
+interface ReviewData {
+  imageBase64: string;
+  nome: string;
+  peso: number;
   calorias: number;
   proteina: number;
-  carboidratos: number;
+  carbo: number;
   gordura: number;
-  descricao?: string;
 }
 
 /** Entrada de refeição salva no diário (prato analisado pela IA) */
@@ -90,9 +92,10 @@ export const DailyJournal: React.FC = () => {
   const [waterGlasses, setWaterGlasses] = useState(0);
   const [completedWorkout, setCompletedWorkout] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [mealAnalysis, setMealAnalysis] = useState<MealAnalysisResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [showPhotoSourceMenu, setShowPhotoSourceMenu] = useState(false);
+  const [reviewData, setReviewData] = useState<ReviewData | null>(null);
+  const [isReviewOpen, setIsReviewOpen] = useState(false);
   const todayDateForDiary = getTodayDateString();
   const [savedDiaryEntries, setSavedDiaryEntries] = useState<DiaryEntry[]>([]);
   const [loadingDiary, setLoadingDiary] = useState(true);
@@ -226,33 +229,36 @@ export const DailyJournal: React.FC = () => {
     setWaterGlasses(prev => Math.max(0, prev - 1));
   };
 
-  const closeMealAnalysisModal = () => {
-    setMealAnalysis(null);
+  const handleDiscardReview = () => {
+    setReviewData(null);
+    setIsReviewOpen(false);
     setAnalysisError(null);
   };
 
-  const handleSaveToDiary = async () => {
-    if (!mealAnalysis) return;
+  const handleConsume = async () => {
+    if (!reviewData) return;
     const result = await saveDietJournalEntry({
-      log_date: todayDateString,
-      calorias: mealAnalysis.calorias,
-      proteina: mealAnalysis.proteina,
-      carbo: mealAnalysis.carboidratos,
-      gordura: mealAnalysis.gordura,
-      descricao: mealAnalysis.descricao,
+      log_date: todayDateForDiary,
+      calorias: reviewData.calorias,
+      proteina: reviewData.proteina,
+      carbo: reviewData.carbo,
+      gordura: reviewData.gordura,
+      descricao: reviewData.nome || undefined,
     });
     if (!result.ok) {
       setAnalysisError(result.error ?? 'Erro ao salvar no diário');
       return;
     }
-    closeMealAnalysisModal();
+    setReviewData(null);
+    setIsReviewOpen(false);
     loadDiaryForToday();
   };
 
   const sendImageForAnalysis = async (base64Data: string) => {
     setIsAnalyzing(true);
     setAnalysisError(null);
-    setMealAnalysis(null);
+    setReviewData(null);
+    setIsReviewOpen(false);
     try {
       console.log('[DailyJournal] Chamando supabase.functions.invoke("rapid-action")...');
       const { data, error } = await supabase.functions.invoke('rapid-action', {
@@ -266,34 +272,44 @@ export const DailyJournal: React.FC = () => {
       if (!data) {
         throw new Error('Resposta vazia da função');
       }
-      // Usa os dados diretamente da resposta da Edge Function
-      const calorias = Number(data.calorias ?? 0);
-      const proteina = Number(data.proteina ?? 0);
-      const carboidratos = Number(data.carbo ?? 0);
-      const gordura = Number(data.gordura ?? 0);
-      const descricao = data.alimento ?? undefined;
-
-      setMealAnalysis({
-        calorias,
-        proteina,
-        carboidratos,
-        gordura,
-        descricao,
-      });
-      const saveResult = await saveDietJournalEntry({
-        log_date: getTodayDateString(),
-        calorias,
-        proteina,
-        carbo: carboidratos,
-        gordura,
-        descricao,
-      });
-      if (!saveResult.ok) {
-        setAnalysisError(saveResult.error ?? 'Erro ao salvar no diário');
-        return;
+      // Parse se a resposta vier como string JSON
+      let parsed = typeof data === 'string' ? JSON.parse(data) : data;
+      if (parsed?.ok === false && parsed?.error) {
+        throw new Error(parsed.error);
       }
-      loadDiaryForToday();
-      closeMealAnalysisModal();
+      // Edge Function retorna { ok, alimentos: [{ alimento, calorias, proteina, carbo, gordura }, ...] }
+      // Aceita também objeto único no root: { alimento, calorias, ... }
+      let alimentos = Array.isArray(parsed?.alimentos) ? parsed.alimentos : [];
+      if (alimentos.length === 0 && parsed?.alimento != null) {
+        alimentos = [parsed];
+      }
+      const nome = alimentos.length > 0
+        ? alimentos.map((a: { alimento?: string }) => String(a?.alimento ?? '').trim()).filter(Boolean).join(', ')
+        : '';
+      const calorias = alimentos.length > 0
+        ? alimentos.reduce((s: number, a: { calorias?: number }) => s + Number(a?.calorias ?? 0), 0)
+        : Number(parsed?.calorias ?? 0);
+      const proteina = alimentos.length > 0
+        ? alimentos.reduce((s: number, a: { proteina?: number }) => s + Number(a?.proteina ?? 0), 0)
+        : Number(parsed?.proteina ?? 0);
+      const carbo = alimentos.length > 0
+        ? alimentos.reduce((s: number, a: { carbo?: number }) => s + Number(a?.carbo ?? 0), 0)
+        : Number(parsed?.carbo ?? 0);
+      const gordura = alimentos.length > 0
+        ? alimentos.reduce((s: number, a: { gordura?: number }) => s + Number(a?.gordura ?? 0), 0)
+        : Number(parsed?.gordura ?? 0);
+
+      const reviewPayload: ReviewData = {
+        imageBase64: base64Data,
+        nome: nome || (parsed?.alimento ? String(parsed.alimento) : ''),
+        peso: Number(parsed?.peso ?? 0),
+        calorias,
+        proteina,
+        carbo,
+        gordura,
+      };
+      setReviewData(reviewPayload);
+      setIsReviewOpen(true);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setAnalysisError(message);
@@ -353,61 +369,81 @@ export const DailyJournal: React.FC = () => {
         </div>
       )}
 
-      {/* Modal com resumo nutricional */}
-      {(mealAnalysis !== null || analysisError !== null) && !isAnalyzing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={closeMealAnalysisModal}>
+      {/* Modal de erro (quando análise falha) */}
+      {analysisError && !isReviewOpen && !isAnalyzing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setAnalysisError(null)}>
           <div
-            className="bg-card-bg border border-alien-green/50 rounded-2xl shadow-xl max-w-sm w-full overflow-hidden"
+            className="bg-zinc-900 border border-red-500/50 rounded-2xl shadow-xl max-w-sm w-full p-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between p-4 border-b border-gray-700">
-              <h3 className="text-lg font-bold text-alien-green">Análise do prato</h3>
+            <p className="text-red-400 mb-4">{analysisError}</p>
+            <button
+              type="button"
+              onClick={() => setAnalysisError(null)}
+              className="w-full py-2 rounded-xl bg-red-500/20 text-red-400 font-medium hover:bg-red-500/30"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Revisão (Revisar antes de salvar) */}
+      {isReviewOpen && reviewData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div
+            className="bg-zinc-900 border border-zinc-700 rounded-2xl shadow-xl max-w-sm w-full overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-zinc-700">
+              <h3 className="text-lg font-bold text-alien-green">Revisar antes de salvar</h3>
               <button
                 type="button"
-                onClick={closeMealAnalysisModal}
-                className="p-2 rounded-full hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
+                onClick={handleDiscardReview}
+                className="p-2 rounded-full hover:bg-zinc-800 text-gray-400 hover:text-white transition-colors"
                 aria-label="Fechar"
               >
                 <X size={20} />
               </button>
             </div>
-            <div className="p-4">
-              {analysisError ? (
-                <p className="text-red-400">{analysisError}</p>
-              ) : mealAnalysis ? (
-                <>
-                  {mealAnalysis.descricao && (
-                    <p className="text-gray-300 text-sm mb-4">{mealAnalysis.descricao}</p>
-                  )}
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    <div className="bg-deep-bg/80 rounded-xl p-3 text-center">
-                      <p className="text-gray-400 text-xs uppercase tracking-wider">Calorias</p>
-                      <p className="text-alien-green font-bold text-xl">{mealAnalysis.calorias}</p>
-                      <p className="text-gray-500 text-xs">kcal</p>
-                    </div>
-                    <div className="bg-deep-bg/80 rounded-xl p-3 text-center">
-                      <p className="text-gray-400 text-xs uppercase tracking-wider">Proteína</p>
-                      <p className="text-bilu-purple font-bold text-xl">{mealAnalysis.proteina}g</p>
-                    </div>
-                    <div className="bg-deep-bg/80 rounded-xl p-3 text-center">
-                      <p className="text-gray-400 text-xs uppercase tracking-wider">Hidratos</p>
-                      <p className="text-bilu-purple font-bold text-xl">{mealAnalysis.carboidratos}g</p>
-                    </div>
-                    <div className="bg-deep-bg/80 rounded-xl p-3 text-center">
-                      <p className="text-gray-400 text-xs uppercase tracking-wider">Gordura</p>
-                      <p className="text-bilu-purple font-bold text-xl">{mealAnalysis.gordura}g</p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleSaveToDiary}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-alien-green/20 border border-alien-green text-alien-green font-bold hover:bg-alien-green/30 transition-colors"
-                  >
-                    <Save size={20} />
-                    Salvar no diário
-                  </button>
-                </>
-              ) : null}
+            <div className="p-4 space-y-4">
+              {/* Imagem do prato */}
+              <div className="flex justify-center">
+                <img
+                  src={reviewData?.imageBase64 ?? ''}
+                  alt="Prato analisado"
+                  className="max-h-[200px] w-auto rounded-xl object-cover"
+                />
+              </div>
+              {/* Conteúdo somente leitura - Card de Confirmação */}
+              <div className="text-center space-y-2">
+                <h3 className="text-xl font-bold text-white">
+                  {reviewData?.nome || 'Identificando...'}
+                </h3>
+                {reviewData?.peso != null && reviewData.peso > 0 && (
+                  <p className="text-gray-400 text-sm">{reviewData.peso} g</p>
+                )}
+                <p className="text-2xl font-bold text-alien-green">
+                  {reviewData?.calorias ?? 0} kcal
+                </p>
+              </div>
+              {/* Botões de ação */}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={handleDiscardReview}
+                  className="flex-1 py-3 rounded-xl bg-red-500/20 border border-red-500 text-red-400 font-bold hover:bg-red-500/30 transition-colors"
+                >
+                  Descartar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConsume}
+                  className="flex-1 py-3 rounded-xl bg-green-500/20 border border-green-500 text-green-400 font-bold hover:bg-green-500/30 transition-colors"
+                >
+                  Consumir
+                </button>
+              </div>
             </div>
           </div>
         </div>

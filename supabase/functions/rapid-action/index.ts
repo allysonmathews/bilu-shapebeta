@@ -156,8 +156,10 @@ Estima os valores nutricionais de cada alimento visível na imagem.`;
         .trim();
       const parsed = JSON.parse(cleaned);
 
-      // Aceitar tanto array quanto objeto com array
-      const arr = Array.isArray(parsed) ? parsed : parsed?.alimentos ?? [];
+      // Aceitar array, objeto com array, ou objeto único de alimento
+      const arr = Array.isArray(parsed)
+        ? parsed
+        : (parsed?.alimentos ?? (parsed && typeof parsed === 'object' && ('alimento' in parsed || 'calorias' in parsed) ? [parsed] : []));
       alimentos = (arr as unknown[]).map((item: unknown) => {
         const i = item as Record<string, unknown>;
         return {
