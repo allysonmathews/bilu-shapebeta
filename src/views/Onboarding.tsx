@@ -6,14 +6,16 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Textarea } from '../components/ui/Textarea';
 import { InjuryMap, Injury } from '../components/InjuryMap';
+import { PreCadastroChat } from '../components/PreCadastroChat';
 import { supabase, saveProfileToSupabase } from '../lib/supabase';
-import { ArrowRight, ArrowLeft, Check, Sun, Dumbbell, Moon } from 'lucide-react';
+import { ArrowRight, ArrowLeft, Check, Sun, Dumbbell, Moon, MessageCircle } from 'lucide-react';
 
 const TOTAL_STEPS = 5;
 
 export const Onboarding: React.FC = () => {
   const { user, setOnboardingData, setPlan, setUser } = useUser();
   const { generatePlan } = usePlan();
+  const [useChatOnboarding, setUseChatOnboarding] = useState(false);
   const [step, setStep] = useState(1);
   const [userName, setUserName] = useState('');
   const [biometrics, setBiometrics] = useState<Biometrics>({
@@ -199,9 +201,24 @@ export const Onboarding: React.FC = () => {
     }));
   };
 
+  if (useChatOnboarding) {
+    return <PreCadastroChat />;
+  }
+
   return (
     <div className="min-h-screen bg-deep-bg p-4 pb-20">
       <div className="max-w-md mx-auto">
+        {/* Opção de preencher via chat */}
+        <div className="mb-6">
+          <Button
+            variant="outline"
+            icon={MessageCircle}
+            onClick={() => setUseChatOnboarding(true)}
+            className="w-full border-alien-green/50 text-alien-green"
+          >
+            Preencher via chat com a IA
+          </Button>
+        </div>
         {/* Progress Bar */}
         <div className="mb-6">
           <div className="flex justify-between text-sm text-gray-400 mb-2">

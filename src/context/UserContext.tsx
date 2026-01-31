@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { User, OnboardingData, FourWeekPlan, ProgressEntry, ExerciseProgress } from '../types';
-import { supabase, getProfileByUserId, type ProfileRow } from '../lib/supabase';
+import { supabase, getProfileByUserId, getPreCadastroProfile, type ProfileRow, type PreCadastroProfileRow } from '../lib/supabase';
 
 // localStorage: bilu_user, bilu_onboarding, bilu_plan, bilu_progress, bilu_exercise_progress, bilu_completed_meals
 // Estrutura para rastrear refeições completadas por data
@@ -27,6 +27,8 @@ interface UserContextType {
   addProgressEntry: (entry: ProgressEntry) => void;
   updateExerciseProgress: (exerciseId: string, exerciseName: string, date: string, sets: number, reps: number, weight: number) => void;
   toggleMealCompletion: (date: string, mealId: string) => void;
+  /** Recarrega o perfil do Supabase (ex.: após pre-cadastro via chat). Se onReady for passado, será chamado com os dados para que o plano seja gerado fora. */
+  refreshProfileFromSupabase: (onReady?: (data: OnboardingData) => void) => Promise<void>;
   logout: () => void;
 }
 
@@ -200,6 +202,81 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     profileCheckDoneRef.current = true;
   }, []);
 
+  const refreshProfileFromSupabase = useCallback(async (onReady?: (data: OnboardingData) => void) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user?.id) return;
+
+    const profile = await getPreCadastroProfile(session.user.id);
+    if (!profile) return;
+
+    const goalRaw = profile.goal ?? profile.objective ?? 'hypertrophy';
+    const goalMap: Record<string, OnboardingData['goals']['primary']> = {
+      Hipertrofia: 'hypertrophy',
+      'Perda de peso': 'weight_loss',
+      'Ganho de massa': 'hypertrophy',
+      Força: 'strength',
+      Resistência: 'endurance',
+      Manutenção: 'maintenance',
+      'Definição Muscular': 'muscle_definition',
+      hypertrophy: 'hypertrophy',
+      weight_loss: 'weight_loss',
+      strength: 'strength',
+      endurance: 'endurance',
+      maintenance: 'maintenance',
+      muscle_definition: 'muscle_definition',
+    };
+    const goal = goalMap[goalRaw] ?? 'hypertrophy';
+    const biotypeMap: Record<string, OnboardingData['biometrics']['biotype']> = {
+      Ectomorfo: 'ectomorph',
+      Mesomorfo: 'mesomorph',
+      Endomorfo: 'endomorph',
+      ectomorph: 'ectomorph',
+      mesomorph: 'mesomorph',
+      endomorph: 'endomorph',
+    };
+    const locationMap: Record<string, OnboardingData['preferences']['location']> = {
+      Academia: 'gym',
+      Casa: 'home',
+      Parque: 'park',
+      Misto: 'mixed',
+      gym: 'gym',
+      home: 'home',
+      park: 'park',
+      mixed: 'mixed',
+    };
+    const biotype = biotypeMap[profile.biotype ?? ''] ?? 'mesomorph';
+    const location = locationMap[profile.workout_location ?? ''] ?? 'gym';
+
+    const minimal: OnboardingData = {
+      biometrics: {
+        weight: profile.weight ?? 70,
+        height: profile.height ?? 170,
+        age: profile.age ?? 25,
+        bodyFat: 15,
+        gender: 'male',
+        biotype,
+      },
+      restrictions: {
+        allergies: [],
+        injuries: (profile.injuries ?? []).map((loc) => ({ location: loc, severity: 'mild' as const })),
+      },
+      goals: { primary: goal, secondary: [] },
+      preferences: {
+        workoutDaysPerWeek: profile.days_per_week ?? 3,
+        workoutDuration: 60,
+        location,
+        mealsPerDay: 4,
+        wakeTime: '07:00',
+        workoutTime: '18:00',
+        sleepTime: '23:00',
+      },
+    };
+
+    setOnboardingDataState(minimal);
+    setUserState((prev) => ({ ...prev, onboardingCompleted: true, displayName: (profile.name ?? '').trim() || 'Bilu' }));
+    onReady?.(minimal);
+  }, []);
+
   const clearUserData = useCallback(() => {
     setUserState({ isAuthenticated: false, onboardingCompleted: false });
     setOnboardingDataState(null);
@@ -299,6 +376,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         addProgressEntry,
         updateExerciseProgress,
         toggleMealCompletion,
+        refreshProfileFromSupabase,
         logout,
       }}
     >

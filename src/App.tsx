@@ -3,7 +3,7 @@ import { UserProvider, useUser } from './context/UserContext';
 import { PlanProvider, usePlan } from './context/PlanContext';
 import { ProgressProvider } from './context/ProgressContext';
 import { Login } from './views/Login';
-import { Onboarding } from './views/Onboarding';
+import { PreCadastroChat } from './components/PreCadastroChat';
 import { DailyJournal } from './views/DailyJournal';
 import { WorkoutView } from './views/WorkoutView';
 import { DietView } from './views/DietView';
@@ -52,6 +52,7 @@ const AppContent: React.FC = () => {
     setOnboardingData,
     setPlan,
     setUser,
+    refreshProfileFromSupabase,
   } = useUser();
   const { generatePlan } = usePlan();
   const [currentTab, setCurrentTab] = useState('diario');
@@ -69,17 +70,32 @@ const AppContent: React.FC = () => {
 
   // Restaurar estado a partir do perfil no Supabase (usuário já é aluno, novo dispositivo)
   useEffect(() => {
-    if (restoreDone || !profileCheckResult || onboardingData !== null) return;
-    const name = (profileCheckResult.name ?? '').trim();
-    const objective = (profileCheckResult.objective ?? '').trim();
-    if (!name || !objective) return;
+    if (restoreDone || onboardingData !== null) return;
 
-    const minimal = buildOnboardingDataFromProfile(profileCheckResult);
-    setOnboardingData(minimal);
-    setPlan(generatePlan(minimal));
-    setUser({ ...user, onboardingCompleted: true, displayName: name });
-    clearProfileCheckResult();
-    setRestoreDone(true);
+    const tryRestoreFromStandardProfile = () => {
+      if (!profileCheckResult) return false;
+      const name = (profileCheckResult.name ?? '').trim();
+      const objective = (profileCheckResult.objective ?? '').trim();
+      if (!name || !objective) return false;
+
+      const minimal = buildOnboardingDataFromProfile(profileCheckResult);
+      setOnboardingData(minimal);
+      setPlan(generatePlan(minimal));
+      setUser({ ...user, onboardingCompleted: true, displayName: name });
+      clearProfileCheckResult();
+      setRestoreDone(true);
+      return true;
+    };
+
+    if (tryRestoreFromStandardProfile()) return;
+
+    // Perfil pre-cadastro (biotype preenchido pela IA, mas sem name/objective)
+    if (profileCheckResult?.biotype) {
+      refreshProfileFromSupabase((data) => {
+        setPlan(generatePlan(data));
+        setRestoreDone(true);
+      });
+    }
   }, [
     restoreDone,
     profileCheckResult,
@@ -90,6 +106,7 @@ const AppContent: React.FC = () => {
     setUser,
     user,
     clearProfileCheckResult,
+    refreshProfileFromSupabase,
   ]);
 
   // Verificando sessão Supabase
@@ -124,9 +141,9 @@ const AppContent: React.FC = () => {
     );
   }
 
-  // Se não completou onboarding (nem no localStorage nem no Supabase), mostrar Onboarding
+  // Se não completou onboarding (sem perfil), mostrar apenas o Chat da IA
   if (!user.onboardingCompleted || !onboardingData) {
-    return <Onboarding />;
+    return <PreCadastroChat />;
   }
 
   // App principal com navegação

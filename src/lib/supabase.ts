@@ -188,6 +188,46 @@ export async function saveDietJournalEntry(
   }
 }
 
+/** Perfil retornado pelo pre-cadastro (weight, height, goal, etc.). */
+export interface PreCadastroProfileRow {
+  id: string;
+  weight?: number;
+  height?: number;
+  age?: number;
+  biotype?: string;
+  goal?: string;
+  objective?: string;
+  days_per_week?: number;
+  workout_location?: string;
+  injuries?: string[];
+  name?: string | null;
+  email?: string | null;
+  calories?: number;
+}
+
+/**
+ * Busca perfil completo na tabela profiles (inclui campos do pre-cadastro).
+ */
+export async function getPreCadastroProfile(userId: string): Promise<PreCadastroProfileRow | null> {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('[Supabase] Erro ao buscar perfil pre-cadastro:', error.message);
+      return null;
+    }
+    return data as PreCadastroProfileRow | null;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[Supabase] Exceção ao buscar perfil pre-cadastro:', message);
+    return null;
+  }
+}
+
 /**
  * Busca entradas do diário alimentar para um usuário e intervalo de datas.
  * Usado para popular o Diário e para gráficos de consumo.
