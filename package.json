@@ -17,8 +17,10 @@
   },
   "dependencies": {
     "@capacitor/android": "^8.0.1",
-    "@supabase/supabase-js": "^2.47.10",
+    "@capacitor/camera": "^8.0.0",
     "@expo/metro-runtime": "~6.1.2",
+    "@ionic/pwa-elements": "^3.3.0",
+    "@supabase/supabase-js": "^2.47.10",
     "expo": "^54.0.32",
     "lucide-react": "^0.294.0",
     "react": "19.1.0",

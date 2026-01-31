@@ -127,3 +127,94 @@ export async function saveWorkoutLog(
     return { ok: false, error: message };
   }
 }
+
+/** Uma entrada do diário alimentar (prato salvo). */
+export interface DietJournalRow {
+  id: string;
+  user_id: string;
+  log_date: string;
+  calorias: number;
+  proteina: number;
+  carbo: number;
+  gordura: number;
+  descricao: string | null;
+  created_at?: string;
+}
+
+/** Payload para salvar uma entrada no diário alimentar. */
+export interface DietJournalPayload {
+  log_date: string;
+  calorias: number;
+  proteina: number;
+  carbo: number;
+  gordura: number;
+  descricao?: string;
+}
+
+/**
+ * Salva uma entrada no diário alimentar (diet_journal) no Supabase.
+ * Usado quando o usuário salva um prato analisado pela IA no Diário.
+ */
+export async function saveDietJournalEntry(
+  payload: DietJournalPayload
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user?.id) {
+      return { ok: false, error: 'Usuário não logado' };
+    }
+
+    const row = {
+      user_id: session.user.id,
+      log_date: payload.log_date,
+      calorias: payload.calorias,
+      proteina: payload.proteina,
+      carbo: payload.carbo,
+      gordura: payload.gordura,
+      descricao: payload.descricao ?? null,
+    };
+
+    const { error } = await supabase.from('diet_journal').insert(row);
+
+    if (error) {
+      console.warn('[Supabase] diet_journal: erro', error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[Supabase] diet_journal: exceção', message);
+    return { ok: false, error: message };
+  }
+}
+
+/**
+ * Busca entradas do diário alimentar para um usuário e intervalo de datas.
+ * Usado para popular o Diário e para gráficos de consumo.
+ */
+export async function getDietJournalEntries(
+  userId: string,
+  dateFrom: string,
+  dateTo: string
+): Promise<DietJournalRow[]> {
+  try {
+    const { data, error } = await supabase
+      .from('diet_journal')
+      .select('id, user_id, log_date, calorias, proteina, carbo, gordura, descricao, created_at')
+      .eq('user_id', userId)
+      .gte('log_date', dateFrom)
+      .lte('log_date', dateTo)
+      .order('log_date', { ascending: true })
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.warn('[Supabase] getDietJournalEntries: erro', error.message);
+      return [];
+    }
+    return (data as DietJournalRow[]) ?? [];
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[Supabase] getDietJournalEntries: exceção', message);
+    return [];
+  }
+}
