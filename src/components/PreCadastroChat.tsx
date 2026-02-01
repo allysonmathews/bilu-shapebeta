@@ -8,7 +8,10 @@ export interface ChatMessage {
 }
 
 const INITIAL_AI_MESSAGE =
-  'Olá! Sou o BiluTrainer. Para montar seu plano de treino e dieta, preciso te conhecer melhor. Qual seu peso e altura atual?';
+  'Olá! Sou o Bilu Shape AI. Para montar seu plano de treino e dieta, preciso te conhecer melhor. Qual seu nome?';
+
+const CHAT_API_URL =
+  (import.meta.env.VITE_CHAT_API_URL as string | undefined) ?? '/api/chat/onboarding';
 
 export const PreCadastroChat: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -29,6 +32,7 @@ export const PreCadastroChat: React.FC = () => {
   }, [messages, scrollToBottom]);
 
   const handleSend = async () => {
+    console.log('CHAMANDO API...');
     const text = inputValue.trim();
     if (!text || isLoading) return;
 
@@ -38,69 +42,112 @@ export const PreCadastroChat: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        setMessages((prev) => [
-          ...prev,
-          { role: 'assistant', content: 'Erro: você precisa estar logado para continuar.' },
-        ]);
-        return;
-      }
-
       const messagesForApi = [
         ...messages.map((m) => ({ role: m.role, content: m.content })),
         { role: 'user' as const, content: text },
       ];
 
-      const { data, error } = await supabase.functions.invoke('pre-cadastro', {
-        body: { messages: messagesForApi },
-      });
+      if (CHAT_API_URL) {
+        // Nova API Next.js com streaming
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token;
 
-      if (error) {
-        console.error('[PreCadastroChat] Erro na Edge Function:', error);
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: 'Ocorreu um erro ao processar sua resposta. Tente novamente.',
+        const res = await fetch(CHAT_API_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token && { Authorization: `Bearer ${token}` }),
           },
-        ]);
-        return;
-      }
+          body: JSON.stringify({ messages: messagesForApi }),
+        });
 
-      let aiContent: string;
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error((err as { error?: string }).error || `Erro ${res.status}`);
+        }
 
-      if (typeof data === 'object' && data !== null) {
-        if ('content' in data && typeof (data as { content: string }).content === 'string') {
-          aiContent = (data as { content: string }).content;
-        } else if (
-          'choices' in data &&
-          Array.isArray((data as { choices: unknown[] }).choices) &&
-          (data as { choices: { message?: { content?: string } }[] }).choices[0]?.message?.content
-        ) {
-          aiContent = (data as { choices: { message: { content: string } }[] }).choices[0].message
-            .content;
-        } else {
-          aiContent = 'Desculpe, não consegui processar a resposta. Tente novamente.';
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        let fullContent = '';
+
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, { stream: true });
+            fullContent += chunk;
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last?.role === 'assistant') {
+                next[next.length - 1] = { ...last, content: fullContent };
+              } else {
+                next.push({ role: 'assistant', content: fullContent });
+              }
+              return next;
+            });
+          }
+        }
+
+        if (!fullContent) {
+          setMessages((prev) => [...prev, { role: 'assistant', content: 'Desculpe, não recebi resposta. Tente novamente.' }]);
+        }
+
+        if (fullContent.includes('Perfil salvo com sucesso!') || fullContent.toLowerCase().includes('tudo pronto') || fullContent.toLowerCase().includes('finalizamos')) {
+          setProfileSaved(true);
         }
       } else {
-        aiContent = 'Desculpe, ocorreu um erro inesperado. Tente novamente.';
-      }
+        // Supabase Edge Function (sem streaming)
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          setMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: 'Erro: você precisa estar logado para continuar.' },
+          ]);
+          return;
+        }
 
-      const assistantMessage: ChatMessage = { role: 'assistant', content: aiContent };
-      setMessages((prev) => [...prev, assistantMessage]);
+        const { data, error } = await supabase.functions.invoke('pre-cadastro', {
+          body: { messages: messagesForApi },
+        });
 
-      if (aiContent.includes('Perfil salvo com sucesso!')) {
-        setProfileSaved(true);
+        if (error) {
+          console.error('[PreCadastroChat] Erro na Edge Function:', error);
+          setMessages((prev) => [
+            ...prev,
+            { role: 'assistant', content: 'Ocorreu um erro ao processar sua resposta. Tente novamente.' },
+          ]);
+          return;
+        }
+
+        let aiContent: string;
+        if (typeof data === 'object' && data !== null) {
+          if ('content' in data && typeof (data as { content: string }).content === 'string') {
+            aiContent = (data as { content: string }).content;
+          } else if (
+            'choices' in data &&
+            Array.isArray((data as { choices: unknown[] }).choices) &&
+            (data as { choices: { message?: { content?: string } }[] }).choices[0]?.message?.content
+          ) {
+            aiContent = (data as { choices: { message: { content: string } }[] }).choices[0].message.content;
+          } else {
+            aiContent = 'Desculpe, não consegui processar a resposta. Tente novamente.';
+          }
+        } else {
+          aiContent = 'Desculpe, ocorreu um erro inesperado. Tente novamente.';
+        }
+
+        setMessages((prev) => [...prev, { role: 'assistant', content: aiContent }]);
+        if (aiContent.includes('Perfil salvo com sucesso!')) {
+          setProfileSaved(true);
+        }
       }
     } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Ocorreu um erro. Tente novamente.';
       console.error('[PreCadastroChat] Erro:', err);
       setMessages((prev) => [
         ...prev,
-        {
-          role: 'assistant',
-          content: 'Ocorreu um erro. Por favor, tente novamente.',
-        },
+        { role: 'assistant', content: msg },
       ]);
     } finally {
       setIsLoading(false);
@@ -127,7 +174,7 @@ export const PreCadastroChat: React.FC = () => {
             <Dumbbell size={22} className="text-[#00FF00]" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white">BiluTrainer</h1>
+            <h1 className="text-lg font-bold text-white">Bilu Shape AI</h1>
             <p className="text-xs text-gray-400">Preencha seu perfil via chat</p>
           </div>
         </div>
