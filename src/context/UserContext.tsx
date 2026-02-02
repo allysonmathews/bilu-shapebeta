@@ -203,13 +203,14 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const refreshProfileFromSupabase = useCallback(async (onReady?: (data: OnboardingData) => void) => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.user?.id) return;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user?.id) return;
 
-    const profile: PreCadastroProfileRow | null = await getPreCadastroProfile(session.user.id);
-    if (!profile) return;
+      const profile: PreCadastroProfileRow | null = await getPreCadastroProfile(session.user.id);
+      if (!profile) return;
 
-    const goalRaw = profile.goal ?? profile.objective ?? 'hypertrophy';
+      const goalRaw = profile.goal ?? profile.objective ?? 'hypertrophy';
     const goalMap: Record<string, OnboardingData['goals']['primary']> = {
       Hipertrofia: 'hypertrophy',
       'Perda de peso': 'weight_loss',
@@ -260,34 +261,51 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           ? 'other'
           : 'male';
 
-    const minimal: OnboardingData = {
-      biometrics: {
-        weight: profile.weight ?? 0,
-        height: profile.height ?? 0,
-        age: profile.age ?? 0,
-        bodyFat: 0,
-        gender,
-        biotype,
-      },
-      restrictions: {
-        allergies: [],
-        injuries: (profile.injuries ?? []).map((loc) => ({ location: loc, severity: 'mild' as const })),
-      },
-      goals: { primary: goal, secondary: [] },
-      preferences: {
-        workoutDaysPerWeek: profile.days_per_week ?? 3,
-        workoutDuration: 60,
-        location,
-        mealsPerDay: profile.meals_per_day ?? 4,
-        wakeTime,
-        workoutTime,
-        sleepTime,
-      },
-    };
+      // Sanitização: converter para Number (banco pode retornar string) antes de usar na UI
+      const weight = Number(profile.weight);
+      const height = Number(profile.height);
+      const age = Number(profile.age);
+      const daysPerWeek = Number(profile.days_per_week);
+      const workoutDuration = Number(profile.workout_duration);
+      const mealsPerDay = Number(profile.meals_per_day);
+      const allergies = Array.isArray(profile.allergies) ? profile.allergies : [];
+      const injuriesRaw = Array.isArray(profile.injuries) ? profile.injuries : [];
+      const injuries = injuriesRaw.map((loc) => ({
+        location: typeof loc === 'string' ? loc : String(loc),
+        severity: 'mild' as const,
+      }));
 
-    setOnboardingDataState(minimal);
-    setUserState((prev) => ({ ...prev, onboardingCompleted: true, displayName: (profile.name ?? '').trim() || 'Bilu' }));
-    onReady?.(minimal);
+      const minimal: OnboardingData = {
+        biometrics: {
+          weight: Number.isFinite(weight) ? weight : 0,
+          height: Number.isFinite(height) ? height : 0,
+          age: Number.isFinite(age) ? age : 0,
+          bodyFat: 0,
+          gender,
+          biotype,
+        },
+        restrictions: { allergies, injuries },
+        goals: { primary: goal, secondary: [] },
+        preferences: {
+          workoutDaysPerWeek: Number.isFinite(daysPerWeek) && daysPerWeek >= 1 && daysPerWeek <= 7 ? daysPerWeek : 3,
+          workoutDuration: Number.isFinite(workoutDuration) && workoutDuration > 0 ? workoutDuration : 60,
+          location,
+          mealsPerDay: Number.isFinite(mealsPerDay) && mealsPerDay >= 1 ? mealsPerDay : 4,
+          wakeTime,
+          workoutTime,
+          sleepTime,
+        },
+      };
+
+      setOnboardingDataState(minimal);
+      setUserState((prev) => ({ ...prev, onboardingCompleted: true, displayName: (profile.name ?? '').trim() || 'Bilu' }));
+      onReady?.(minimal);
+    } catch (e) {
+      console.error('[UserContext] Erro ao carregar perfil do Supabase:', e);
+      if (e instanceof Error) {
+        console.error('[UserContext] Mensagem:', e.message, 'Stack:', e.stack);
+      }
+    }
   }, []);
 
   const clearUserData = useCallback(() => {

@@ -148,7 +148,7 @@ const getInjuryLabel = (id: string): string => {
 };
 
 export const ProfileView: React.FC = () => {
-  const { onboardingData, setOnboardingData, setPlan, logout } = useUser();
+  const { onboardingData, setOnboardingData, setPlan, logout, refreshProfileFromSupabase } = useUser();
   const [isEditing, setIsEditing] = useState(false);
   const [showInjuryMap, setShowInjuryMap] = useState(false);
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
@@ -202,7 +202,7 @@ export const ProfileView: React.FC = () => {
 
     setOnboardingData(updatedData);
 
-    // Persistir todos os campos do perfil permanentemente no Supabase
+    // Persistir todos os campos do perfil permanentemente no Supabase (inclui objective e workout_location)
     const { data: { session } } = await supabase.auth.getSession();
     if (session?.user?.id) {
       const { error } = await supabase
@@ -216,15 +216,23 @@ export const ProfileView: React.FC = () => {
             age: updatedData.biometrics.age ?? null,
             biotype: updatedData.biometrics.biotype ?? null,
             gender: updatedData.biometrics.gender ?? null,
+            objective: updatedData.goals.primary ?? null,
+            workout_location: updatedData.preferences.location ?? null,
             meals_per_day: updatedData.preferences.mealsPerDay ?? null,
             wake_up_time: updatedData.preferences.wakeTime ?? null,
             sleep_time: updatedData.preferences.sleepTime ?? null,
             workout_time: updatedData.preferences.workoutTime ?? null,
+            days_per_week: updatedData.preferences.workoutDaysPerWeek ?? null,
+            workout_duration: updatedData.preferences.workoutDuration ?? null,
+            allergies: updatedData.restrictions.allergies?.length ? updatedData.restrictions.allergies : null,
           },
           { onConflict: 'id' }
         );
       if (error) {
-        console.error('Erro ao salvar perfil no Supabase:', error.message);
+        console.error('[ProfileView] Erro ao salvar perfil no Supabase:', error.message, 'code:', error.code, 'details:', error.details);
+      } else {
+        // Sincronizar estado local com o banco (evita rollback se houver refetch depois)
+        await refreshProfileFromSupabase();
       }
     }
 
@@ -258,7 +266,17 @@ export const ProfileView: React.FC = () => {
     );
   }
 
-  const { biometrics, goals, preferences, restrictions } = onboardingData;
+  // Valores seguros com optional chaining e defaults (evita tela preta se dado demorar ou vier null)
+  const biometrics = onboardingData?.biometrics ?? { weight: 0, height: 0, age: 0, bodyFat: 0, gender: 'male', biotype: 'mesomorph' };
+  const goals = onboardingData?.goals ?? { primary: 'hypertrophy' as const, secondary: [] };
+  const preferences = onboardingData?.preferences ?? { workoutDaysPerWeek: 3, workoutDuration: 60, location: 'gym', mealsPerDay: 4 };
+  const restrictions = onboardingData?.restrictions ?? { allergies: [], injuries: [] };
+  const weight = Number(biometrics?.weight) || 0;
+  const height = Number(biometrics?.height) || 0;
+  const age = Number(biometrics?.age) || 0;
+  const workoutDaysPerWeek = Number(preferences?.workoutDaysPerWeek) || 3;
+  const workoutDuration = Number(preferences?.workoutDuration) || 60;
+  const mealsPerDay = Number(preferences?.mealsPerDay) || 4;
 
   // Traduções
   const getGenderLabel = (gender: string) => {
@@ -381,35 +399,35 @@ export const ProfileView: React.FC = () => {
                   <Scale size={16} />
                   <span>Peso:</span>
                 </div>
-                <span className="text-alien-green font-semibold">{biometrics.weight} kg</span>
+                <span className="text-alien-green font-semibold">{weight} kg</span>
               </div>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2 text-gray-400">
                   <Ruler size={16} />
                   <span>Altura:</span>
                 </div>
-                <span className="text-alien-green font-semibold">{biometrics.height} cm</span>
+                <span className="text-alien-green font-semibold">{height} cm</span>
               </div>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2 text-gray-400">
                   <Calendar size={16} />
                   <span>Idade:</span>
                 </div>
-                <span className="text-alien-green font-semibold">{biometrics.age} anos</span>
+                <span className="text-alien-green font-semibold">{age} anos</span>
               </div>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2 text-gray-400">
                   <Users size={16} />
                   <span>Gênero:</span>
                 </div>
-                <span className="text-alien-green font-semibold">{getGenderLabel(biometrics.gender)}</span>
+                <span className="text-alien-green font-semibold">{getGenderLabel(biometrics?.gender ?? 'male')}</span>
               </div>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2 text-gray-400">
                   <Activity size={16} />
                   <span>Biotipo:</span>
                 </div>
-                <span className="text-alien-green font-semibold">{getBiotypeLabel(biometrics.biotype)}</span>
+                <span className="text-alien-green font-semibold">{getBiotypeLabel(biometrics?.biotype)}</span>
               </div>
             </div>
           </Card>
@@ -426,28 +444,28 @@ export const ProfileView: React.FC = () => {
                   <Target size={16} />
                   <span>Objetivo:</span>
                 </div>
-                <span className="text-alien-green font-semibold">{getGoalLabel(goals.primary)}</span>
+                <span className="text-alien-green font-semibold">{getGoalLabel(goals?.primary ?? 'hypertrophy')}</span>
               </div>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2 text-gray-400">
                   <CalendarDays size={16} />
                   <span>Dias por Semana:</span>
                 </div>
-                <span className="text-alien-green font-semibold">{preferences.workoutDaysPerWeek} dias</span>
+                <span className="text-alien-green font-semibold">{workoutDaysPerWeek} dias</span>
               </div>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2 text-gray-400">
                   <Clock size={16} />
                   <span>Duração:</span>
                 </div>
-                <span className="text-alien-green font-semibold">{preferences.workoutDuration} min</span>
+                <span className="text-alien-green font-semibold">{workoutDuration} min</span>
               </div>
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2 text-gray-400">
                   <MapPin size={16} />
                   <span>Local:</span>
                 </div>
-                <span className="text-alien-green font-semibold">{getLocationLabel(preferences.location)}</span>
+                <span className="text-alien-green font-semibold">{getLocationLabel(preferences?.location ?? 'gym')}</span>
               </div>
             </div>
           </Card>
@@ -464,14 +482,14 @@ export const ProfileView: React.FC = () => {
                   <Utensils size={16} />
                   <span>Refeições por Dia:</span>
                 </div>
-                <span className="text-alien-green font-semibold">{preferences.mealsPerDay} refeições</span>
+                <span className="text-alien-green font-semibold">{mealsPerDay} refeições</span>
               </div>
               <div>
                 <div className="flex items-center gap-2 text-gray-400 mb-2">
                   <AlertTriangle size={16} />
                   <span>Alergias Alimentares:</span>
                 </div>
-                {restrictions.allergies && restrictions.allergies.length > 0 ? (
+                {restrictions?.allergies && restrictions.allergies.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
                     {restrictions.allergies.map((allergy, index) => (
                       <span
@@ -502,7 +520,7 @@ export const ProfileView: React.FC = () => {
                   <span>Acordar:</span>
                 </div>
                 <span className="text-alien-green font-semibold">
-                  {preferences.wakeTime || '--:--'}
+                  {preferences?.wakeTime || '--:--'}
                 </span>
               </div>
               <div className="flex justify-between items-center">
@@ -511,7 +529,7 @@ export const ProfileView: React.FC = () => {
                   <span>Treino:</span>
                 </div>
                 <span className="text-alien-green font-semibold">
-                  {preferences.workoutTime || '--:--'}
+                  {preferences?.workoutTime || '--:--'}
                 </span>
               </div>
               <div className="flex justify-between items-center">
@@ -520,7 +538,7 @@ export const ProfileView: React.FC = () => {
                   <span>Dormir:</span>
                 </div>
                 <span className="text-alien-green font-semibold">
-                  {preferences.sleepTime || '--:--'}
+                  {preferences?.sleepTime || '--:--'}
                 </span>
               </div>
             </div>
@@ -533,16 +551,16 @@ export const ProfileView: React.FC = () => {
               <h3 className="text-white font-bold text-lg">Saúde & Lesões</h3>
             </div>
             <div className="space-y-2">
-              {restrictions.injuries && restrictions.injuries.length > 0 ? (
+              {restrictions?.injuries && restrictions.injuries.length > 0 ? (
                 <div className="space-y-2">
                   {restrictions.injuries.map((injury, index) => (
                     <div
                       key={index}
-                      className={`px-3 py-2 rounded-lg border ${getSeverityColor(injury.severity)} text-sm`}
+                      className={`px-3 py-2 rounded-lg border ${getSeverityColor(injury?.severity ?? 'mild')} text-sm`}
                     >
                       <div className="flex justify-between items-center">
-                        <span className="font-medium">{getInjuryLabel(injury.location)}</span>
-                        <span className="text-xs opacity-75">({getSeverityLabel(injury.severity)})</span>
+                        <span className="font-medium">{getInjuryLabel(injury?.location ?? '')}</span>
+                        <span className="text-xs opacity-75">({getSeverityLabel(injury?.severity ?? 'mild')})</span>
                       </div>
                     </div>
                   ))}

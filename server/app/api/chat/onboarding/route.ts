@@ -9,18 +9,80 @@ const numericOptional = z
   .optional()
   .transform((v) => (v === null || v === undefined || v === '') ? undefined : Number(v));
 
+/** Converte altura para cm. Aceita: 180 (cm), "1.80" ou "1,80" (metros) -> 180. */
+function parseHeightToCm(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  const s = String(v).trim().replace(',', '.');
+  const n = Number(s);
+  if (Number.isNaN(n)) return undefined;
+  if (n > 0 && n < 3) return Math.round(n * 100); // metros -> cm
+  if (n >= 100 && n <= 250) return Math.round(n); // já em cm
+  if (n >= 30 && n < 100) return Math.round(n); // cm (ex: 80 cm)
+  return undefined;
+}
+
+/** Converte duração para minutos. Aceita: 90, "90", "1h30", "1h 30", "1.5" (horas). */
+function parseWorkoutDurationToMinutes(v: unknown): number | undefined {
+  if (v === null || v === undefined || v === '') return undefined;
+  if (typeof v === 'number' && !Number.isNaN(v) && v > 0 && v <= 180) return Math.round(v);
+  const s = String(v).trim().toLowerCase().replace(/\s/g, '');
+  const n = Number(s.replace(',', '.'));
+  if (!Number.isNaN(n)) {
+    if (n <= 3 && n > 0) return Math.round(n * 60); // horas -> min
+    if (n > 0 && n <= 180) return Math.round(n);
+    return undefined;
+  }
+  const match = s.match(/^(\d+)(?:h|hr)?(\d+)?m?$/);
+  if (match) {
+    const hours = parseInt(match[1], 10) || 0;
+    const mins = parseInt(match[2], 10) || 0;
+    const total = hours * 60 + mins;
+    return total > 0 && total <= 180 ? total : undefined;
+  }
+  return undefined;
+}
+
 /** Schema Zod para os argumentos da tool updateUserProfile. Campos numéricos aceitam null/string e são opcionais para evitar "expected number, but got null". */
 const updateUserProfileArgsSchema = z.object({
   name: z.string().nullable().optional(),
   age: numericOptional,
   weight: numericOptional,
-  height: numericOptional,
+  /** Altura: aceita cm (180) ou metros (1.80 / 1,80). Normalizado para cm. */
+  height: z
+    .union([z.number(), z.string(), z.null(), z.undefined()])
+    .optional()
+    .transform((v) => parseHeightToCm(v)),
   objective: z.string().nullable().optional(),
   biotype: z.string().nullable().optional(),
   calories: numericOptional,
   gender: z.string().nullable().optional(),
   workout_location: z.string().nullable().optional(),
+  /** Dias por semana disponíveis para treino (1-7). */
+  days_per_week: z
+    .union([z.number(), z.string(), z.null(), z.undefined()])
+    .optional()
+    .transform((v) => {
+      if (v === null || v === undefined || v === '') return undefined;
+      const n = Number(v);
+      return !Number.isNaN(n) && n >= 1 && n <= 7 ? Math.round(n) : undefined;
+    }),
+  /** Duração do treino: minutos (60) ou "1h30" -> 90. Normalizado para minutos. */
+  workout_duration: z
+    .union([z.number(), z.string(), z.null(), z.undefined()])
+    .optional()
+    .transform((v) => parseWorkoutDurationToMinutes(v)),
   injuries: z
+    .union([z.array(z.string()), z.string(), z.null(), z.undefined()])
+    .optional()
+    .transform((v) => {
+      if (v === null || v === undefined) return [] as string[];
+      if (Array.isArray(v)) return v.filter((x) => typeof x === 'string');
+      const s = String(v).trim().toLowerCase();
+      if (s === 'não' || s === 'nenhuma' || s === 'nao' || s === '') return [] as string[];
+      return [String(v).trim()];
+    }),
+  /** Alergias ou aversões alimentares (lista de strings). */
+  allergies: z
     .union([z.array(z.string()), z.string(), z.null(), z.undefined()])
     .optional()
     .transform((v) => {
@@ -48,36 +110,15 @@ const updateUserProfileArgsSchema = z.object({
   workoutTime: z.string().nullable().optional(),
 }).passthrough();
 
-const SYSTEM_PROMPT = `Você é o Bilu Shape AI, um especialista em Nutrição e Educação Física. Seu objetivo é fazer uma anamnese fluida e amigável, como um bate-papo. Não faça listas de perguntas. Faça uma ou duas perguntas por vez. Você precisa coletar: Nome, Idade, Peso, Altura, Gênero, Biotipo (ectomorfo, mesomorfo ou endomorfo — OBRIGATÓRIO), Objetivo (emagrecer/hipertrofia), Nível de Atividade, Lesões, Restrições Alimentares, e DADOS DE ROTINA: quantas refeições por dia, horário de acordar, horário de dormir e horário de treino. Mantenha o tom motivador e casual.
+// Prompt conciso para Llama 8B: menos tokens = menor custo por mensagem
+const SYSTEM_PROMPT = `Bilu Shape AI. Entrevista em 5 passos. Exija dados; nunca aceite ficha em branco.
 
-REGRA ANTI-ALUCINAÇÃO — NUNCA imprima o JSON da chamada da função para o usuário. Execute a tool updateUserProfile de forma silenciosa pelo mecanismo de function call. Se estiver faltando algum dado, apenas pergunte ao usuário; nunca invente uma chamada de função nem mostre código/JSON ao usuário.
+OBRIGATÓRIOS (nunca chame updateUserProfile sem todos): height (cm), weight (kg), age (anos), gender (masculino/feminino/outro).
+Se a função retornar "Faltam dados obrigatórios: X", OBRIGATORIAMENTE peça ao usuário APENAS o que falta (X) e espere a resposta antes de chamar updateUserProfile de novo. Não tente salvar de novo sem ter a informação.
 
-REGRA SOBRE CONFIRMAÇÃO DE SALVAMENTO — Só diga que salvou os dados (ex: "Salvei", "Pronto, salvei") se a função updateUserProfile retornar exatamente "Salvo com sucesso.". Se a função retornar qualquer mensagem de ERRO, NUNCA diga que salvou. Em vez de dizer apenas "JSON inválido" ou mensagem genérica, explique de forma clara e amigável qual dado está incorreto. Exemplos: se o erro mencionar "lesões", diga "Tive um problema com o formato das lesões que você informou. Pode descrever de outra forma? (ex: joelho, costas, nenhuma)"; se mencionar "idade", diga "A idade que você passou está em um formato inválido. Pode informar só o número? (ex: 25)".
-
-Você é um COLETOR DE DADOS. SEMPRE que o usuário disser o nome ou qualquer informação (idade, peso, altura, objetivo, refeições, horários, etc.), você DEVE chamar a função de salvar (updateUserProfile) ANTES de responder. Não responda sem ter chamado a função quando houver dado para salvar.
-
-REGRA OBRIGATÓRIA — Você NÃO é apenas um chat. Se o usuário falar um nome, peso, idade, objetivo, altura, gênero, biotipo, número de refeições ou qualquer horário (acordar/dormir/treino), você DEVE disparar a função updateUserProfile ANTES de dar a próxima resposta. Não peça permissão, apenas salve. Extraia o dado imediatamente, chame updateUserProfile com o que foi dito (e com o que já sabe do contexto), depois responda com empatia e continue a conversa. Salve cada dado assim que for informado, mesmo que parcialmente.
-
-MAPEAMENTO DE NOME — O nome informado pelo usuário (ex: "carteiroi", "Maria", "João", etc.) deve SEMPRE ser mapeado para o campo "name". Se o usuário disser "meu nome é X" ou apenas "X" em contexto de apresentação, use "name": "X".
-
-EXTRAÇÃO OBRIGATÓRIA DE ROTINA (Structured Output):
-- gender: OBRIGATÓRIO. Se o usuário não disser explicitamente, INFIRA pelo nome (ex: Maria → feminino, João → masculino) ou por contexto (ex: "cansada" → feminino). Use: "masculino", "feminino" ou "outro". Nunca deixe null quando já tiver nome ou contexto.
-- meals_per_day: OBRIGATÓRIO quando o usuário informar. Se disser "5 refeições", "como 5x por dia", "faço 5 refeições", etc., o campo meals_per_day TEM que ser o número inteiro (ex: 5). Nunca null quando o usuário tiver dito a quantidade.
-- wake_up_time: string no formato "HH:mm" (ex: "07:00"). Extraia quando o usuário disser a que horas acorda.
-- sleep_time: string no formato "HH:mm" (ex: "22:00"). Extraia quando o usuário disser a que horas dorme.
-- workout_time: string no formato "HH:mm" (ex: "18:00"). Extraia quando o usuário disser o horário em que treina.
-
-CONSISTÊNCIA OBRIGATÓRIA — Ao chamar updateUserProfile, você deve enviar TODOS os dados que já coletou e confirmou até o momento na conversa. Mantenha o contexto acumulado. Se descobrir um dado novo (ex: peso), envie o peso E repita os dados anteriores (ex: nome, objetivo) para garantir consistência. Nunca envie só o dado novo — repasse TUDO que você já sabe. Nunca invente dados que o usuário não informou. Isso evita sobrescrever campos com null. Exemplo: se o usuário disse nome e idade e agora disse "5 refeições", envie { name, age, meals_per_day: 5 }.
-
-REGRA SOBRE CALORIAS — Use APENAS a chave "calories" (em inglês). NUNCA use "calorias" (com 'a'). Se as calorias ainda não foram calculadas, NÃO tente enviar um valor para esse campo; foque em coletar o restante dos dados primeiro. Só envie calories quando tiver um valor numérico válido calculado (ex: TMB + fator de atividade).
-
-VERIFICAÇÃO DE GÊNERO — Se ainda não tiver coletado o gênero, pergunte de forma clara ou infira pelo nome/contexto. Não avance para a geração do plano sem ter o gênero definido (inferido ou informado).
-
-Biotipo é OBRIGATÓRIO — Pergunte o biotipo (ectomorfo, mesomorfo ou endomorfo) e envie sempre que o usuário mencionar. Se não souber, peça para descrever o tipo de corpo (magro/difícil ganhar peso = ectomorfo; atlético/equilibrado = mesomorfo; mais encorpado/fácil ganhar peso = endomorfo).
-
-A cada mensagem, verifique quais dados ainda faltam. Direcione a conversa para coletar os faltantes até o perfil estar 100% completo. Somente após coletar TUDO (incluindo gênero, biotipo e rotina quando informados), ofereça a geração do plano de treino e dieta.
-
-QUANDO O PERFIL ESTIVER COMPLETO — Emita uma resposta final clara confirmando que todas as informações foram salvas com sucesso e que o usuário pode seguir para a geração do plano (treino e dieta). Exemplo: "Perfeito! Salvei todas as suas informações. Agora posso montar seu plano de treino e dieta. Quer que eu gere?"`;
+Normalize: altura em cm (1,80 ou 180 -> 180); duração treino em minutos (1h30 -> 90).
+Passos 1–4: só coletar (nome, físico, rotina, nutrição). Passo 5: só quando usuário confirmar ("sim"/"pode salvar") E tiver peso, altura, idade e gênero, chame updateUserProfile UMA vez com JSON completo.
+Sucesso: responda "Perfil criado com sucesso! Estou gerando seu treino agora." Nunca mostre JSON ao usuário.`;
 
 /* Schema da API: tipos com null para evitar "expected number, but got null". Validação/sanitização com Zod no backend. */
 const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
@@ -86,7 +127,7 @@ const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     function: {
       name: 'updateUserProfile',
       description:
-        'Atualiza o perfil do usuário no banco de dados. Retorno: "Salvo com sucesso." significa que os dados foram gravados (status 200). Qualquer outra mensagem é ERRO — nesse caso NUNCA diga que salvou; repita o erro ao usuário. Campos: name, age, weight, height (number em kg e cm), biotype, objective, calories, gender, workout_location, injuries, meals_per_day (integer), wake_up_time, sleep_time, workout_time (HH:mm). Use "calories" (nunca "calorias"). Inclua TODOS os dados já coletados na conversa.',
+        'Chame UMA VEZ no final, após confirmação do usuário. Envie JSON com height (cm), weight (kg), age, gender e demais campos. Se retornar "Faltam dados obrigatórios: X", peça ao usuário APENAS X e espere resposta antes de chamar de novo.',
       parameters: {
         type: 'object',
         properties: {
@@ -94,16 +135,19 @@ const TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
           age: { type: ['number', 'null'], description: 'Idade em anos' },
           weight: { type: ['number', 'null'], description: 'Peso em kg' },
           height: { type: ['number', 'null'], description: 'Altura em cm' },
-          objective: { type: ['string', 'null'], description: 'Objetivo: emagrecer, hipertrofia, condicionamento, etc.' },
-          biotype: { type: ['string', 'null'], description: 'Biotipo do usuário: ectomorfo, mesomorfo ou endomorfo' },
-          calories: { type: ['number', 'null'], description: 'Meta de calorias diárias (kcal)' },
           gender: { type: ['string', 'null'], description: 'Gênero: masculino, feminino ou outro' },
-          workout_location: { type: ['string', 'null'], description: 'Onde treina: academia, casa, parque, etc.' },
-          injuries: { type: ['array', 'string', 'null'], items: { type: 'string' }, description: 'Lista de lesões ou restrições físicas. Aceita array de strings, string única, ou "Não"/"nenhuma" para array vazio.' },
-          meals_per_day: { type: ['integer', 'null'], description: 'Número de refeições por dia (ex: 5)' },
+          biotype: { type: ['string', 'null'], description: 'Biotipo: ectomorfo, mesomorfo ou endomorfo' },
+          objective: { type: ['string', 'null'], description: 'Objetivo: hipertrofia, emagrecimento, condicionamento, etc.' },
+          days_per_week: { type: ['integer', 'null'], description: 'Dias por semana disponíveis para treino (1-7)' },
+          workout_duration: { type: ['number', 'null'], description: 'Duração do treino em minutos (ex: 60)' },
+          workout_location: { type: ['string', 'null'], description: 'Local de treino: Casa ou Academia' },
           wake_up_time: { type: ['string', 'null'], description: 'Horário que acorda, formato "HH:mm" (ex: "07:00")' },
           sleep_time: { type: ['string', 'null'], description: 'Horário que dorme, formato "HH:mm" (ex: "22:00")' },
-          workout_time: { type: ['string', 'null'], description: 'Horário em que treina, formato "HH:mm" (ex: "18:00")' },
+          workout_time: { type: ['string', 'null'], description: 'Horário preferido de treino, formato "HH:mm" (ex: "18:00")' },
+          meals_per_day: { type: ['integer', 'null'], description: 'Quantidade de refeições por dia (ex: 5)' },
+          allergies: { type: 'array', items: { type: 'string' }, description: 'Alergias ou aversões alimentares (lista de strings)' },
+          injuries: { type: 'array', items: { type: 'string' }, description: 'Lesões ou restrições médicas (lista de strings)' },
+          calories: { type: ['number', 'null'], description: 'Meta de calorias diárias (kcal); omitir se não calculado' },
         },
       },
     },
@@ -209,7 +253,10 @@ const LABEL_POR_CAMPO: Record<string, string> = {
   calories: 'calorias',
   gender: 'gênero',
   workout_location: 'local de treino',
+  days_per_week: 'dias por semana',
+  workout_duration: 'duração do treino',
   injuries: 'lesões',
+  allergies: 'alergias/aversões',
   meals_per_day: 'refeições por dia',
   wake_up_time: 'horário de acordar',
   sleep_time: 'horário de dormir',
@@ -231,7 +278,7 @@ function mensagemErroParaUsuario(
   return `Opa, tive um erro técnico ao salvar seu ${nomeDoDado}.`;
 }
 
-/** Colunas oficiais para o onboarding: apenas estas. Ignore goal (use objective) e calorias (use calories). Tempos no DB: snake_case (wake_up_time, sleep_time, workout_time). */
+/** Colunas oficiais para o onboarding: apenas estas. Tempos no DB: snake_case (wake_up_time, sleep_time, workout_time). */
 const ONBOARDING_COLUMNS = [
   'name',
   'age',
@@ -242,7 +289,10 @@ const ONBOARDING_COLUMNS = [
   'calories',
   'gender',
   'workout_location',
+  'days_per_week',
+  'workout_duration',
   'injuries',
+  'allergies',
   'meals_per_day',
   'wake_up_time',
   'sleep_time',
@@ -256,6 +306,36 @@ function stripNullish<T extends Record<string, unknown>>(obj: T): Record<string,
     if (v !== undefined && v !== null && v !== '') out[k] = v;
   }
   return out;
+}
+
+/** Campos obrigatórios para integridade matemática (IMC, etc.). Retorna mensagem de erro amigável para a IA repetir ao usuário. */
+const REQUIRED_FIELDS = [
+  { key: 'height', label: 'altura', phrase: 'Para calcular suas metas, eu realmente preciso da sua altura. Qual é ela? (pode ser em cm, ex: 175, ou em metros, ex: 1,75)' },
+  { key: 'weight', label: 'peso', phrase: 'Para montar seu plano, preciso do seu peso atual em kg. Qual é?' },
+  { key: 'age', label: 'idade', phrase: 'Preciso da sua idade em anos para ajustar as metas. Qual é?' },
+  { key: 'gender', label: 'gênero', phrase: 'Para personalizar o plano, preciso saber seu gênero (masculino, feminino ou outro). Qual é?' },
+] as const;
+
+function validateRequiredFields(merged: Record<string, unknown>): { ok: true } | { ok: false; error: string } {
+  for (const { key, label, phrase } of REQUIRED_FIELDS) {
+    const v = merged[key];
+    if (v === undefined || v === null || v === '') {
+      return { ok: false, error: `ERRO_CAMPO_OBRIGATÓRIO: ${label} obrigatório(a). Diga ao usuário exatamente: "${phrase}"` };
+    }
+    if (key === 'height' || key === 'weight' || key === 'age') {
+      const n = Number(v);
+      if (Number.isNaN(n) || n <= 0) {
+        return { ok: false, error: `ERRO_CAMPO_OBRIGATÓRIO: ${label} inválido(a). Diga ao usuário exatamente: "${phrase}"` };
+      }
+    }
+    if (key === 'height') {
+      const n = Number(v);
+      if (n < 100 || n > 250) {
+        return { ok: false, error: `ERRO_CAMPO_OBRIGATÓRIO: ${label} inválida (use cm, ex: 175, ou metros ex: 1,75). Diga ao usuário: "${phrase}"` };
+      }
+    }
+  }
+  return { ok: true };
 }
 
 /** Mapeia args da IA para patch: só colunas oficiais. objective (não goal). Use APENAS calories (ignora calorias). Tempos: aceita wake_up_time/sleep_time/workout_time ou wakeTime/sleepTime/workoutTime da IA e grava em snake_case no DB. Só inclui no patch o que vier preenchido; null/undefined são removidos para não sobrescrever dados existentes. */
@@ -286,9 +366,9 @@ function buildProfilePatch(params: Record<string, unknown>): Record<string, unkn
     const n = Number(paramsClean.weight);
     if (!Number.isNaN(n)) patch.weight = n;
   }
-  if (paramsClean.height !== undefined && paramsClean.height !== null) {
-    const n = Number(paramsClean.height);
-    if (!Number.isNaN(n)) patch.height = n;
+  if (paramsClean.height !== undefined && paramsClean.height !== null && paramsClean.height !== '') {
+    const cm = parseHeightToCm(paramsClean.height);
+    if (cm !== undefined) patch.height = cm;
   }
   if (paramsClean.gender !== undefined && paramsClean.gender !== null && String(paramsClean.gender).trim()) {
     patch.gender = String(paramsClean.gender).trim();
@@ -299,8 +379,19 @@ function buildProfilePatch(params: Record<string, unknown>): Record<string, unkn
         ? paramsClean.workout_location
         : String(paramsClean.workout_location);
   }
+  if (paramsClean.days_per_week !== undefined && paramsClean.days_per_week !== null) {
+    const n = Number(paramsClean.days_per_week);
+    if (!Number.isNaN(n) && n >= 1 && n <= 7) patch.days_per_week = Math.round(n);
+  }
+  if (paramsClean.workout_duration !== undefined && paramsClean.workout_duration !== null && paramsClean.workout_duration !== '') {
+    const mins = parseWorkoutDurationToMinutes(paramsClean.workout_duration);
+    if (mins !== undefined) patch.workout_duration = mins;
+  }
   if (Array.isArray(paramsClean.injuries)) {
     patch.injuries = paramsClean.injuries.filter((x) => typeof x === 'string');
+  }
+  if (Array.isArray(paramsClean.allergies)) {
+    patch.allergies = paramsClean.allergies.filter((x) => typeof x === 'string');
   }
   // meals_per_day: integer quando informado (ex: "5 refeições" → 5)
   if (paramsClean.meals_per_day !== undefined && paramsClean.meals_per_day !== null) {
@@ -377,11 +468,27 @@ async function updateUserProfile(
 
   await saveUnifiedLog(user.id, { type: 'tool_input', params }).catch(() => {});
 
+  // Validação manual para modelo menor (Llama 8B): height, weight, age não podem ser nulos ou 0
+  const missing: string[] = [];
+  const h = parseHeightToCm(params.height);
+  if (h == null || h === 0 || Number.isNaN(h)) missing.push('altura');
+  const w = Number(params.weight);
+  if (params.weight == null || params.weight === '' || w === 0 || Number.isNaN(w)) missing.push('peso');
+  const a = Number(params.age);
+  if (params.age == null || params.age === '' || a === 0 || Number.isNaN(a)) missing.push('idade');
+  if (missing.length > 0) {
+    await saveUnifiedLog(user.id, { type: 'validation_required_fields', missing }).catch(() => {});
+    return {
+      ok: false,
+      error: `Faltam dados obrigatórios: ${missing.join(', ')}`,
+    };
+  }
+
   const patchFromAI = buildProfilePatch(params);
 
   const { data: existingProfile } = await supabase
     .from('profiles')
-    .select('name, age, weight, height, objective, biotype, calories, gender, workout_location, injuries, meals_per_day, wake_up_time, sleep_time, workout_time')
+    .select('name, age, weight, height, objective, biotype, calories, gender, workout_location, days_per_week, workout_duration, injuries, allergies, meals_per_day, wake_up_time, sleep_time, workout_time')
     .eq('id', user.id)
     .maybeSingle();
 
@@ -398,13 +505,19 @@ async function updateUserProfile(
   }
 
   const mergedClean = stripNullish(merged);
-  const numericCols = ['age', 'weight', 'height', 'calories', 'meals_per_day'] as const;
+  const numericCols = ['age', 'weight', 'height', 'calories', 'meals_per_day', 'days_per_week', 'workout_duration'] as const;
   for (const col of numericCols) {
     const v = mergedClean[col];
     if (v !== undefined && v !== null && v !== '') {
       const n = Number(v);
       if (!Number.isNaN(n)) mergedClean[col] = col === 'weight' || col === 'height' ? n : Math.round(n);
     }
+  }
+
+  const validation = validateRequiredFields(mergedClean);
+  if (!validation.ok) {
+    await saveUnifiedLog(user.id, { type: 'validation_required_fields', error: validation.error }).catch(() => {});
+    return { ok: false, error: validation.error };
   }
 
   const payload: Record<string, unknown> = {
@@ -531,7 +644,7 @@ export async function POST(req: NextRequest) {
           await openai.chat.completions.create({
             model,
             messages: apiMessages,
-            ...(useTools && { tools: TOOLS, tool_choice: 'required' as const }),
+            ...(useTools && { tools: TOOLS, tool_choice: 'auto' as const }),
             temperature: 0.7,
             stream: true,
           })
@@ -596,9 +709,15 @@ export async function POST(req: NextRequest) {
           pendingDebugLogs.push({ args, userId });
 
           const result = await updateUserProfile(accessToken, args);
-          toolContent = result.ok
-            ? 'Salvo com sucesso.'
-            : `ERRO: ${result.error ?? mensagemErroParaUsuario(args, result.error)}`;
+          if (result.ok) {
+            toolContent = 'Salvo com sucesso.';
+          } else {
+            const err = result.error ?? mensagemErroParaUsuario(args, result.error);
+            // Fallback explícito para Llama 8B: se for "Faltam dados", instruir a pedir antes de salvar de novo
+            toolContent = err.startsWith('Faltam dados obrigatórios')
+              ? `${err} OBRIGATÓRIO: peça ao usuário a informação que falta e espere a resposta antes de chamar updateUserProfile novamente.`
+              : `ERRO: ${err}`;
+          }
           toolResults.set(id, toolContent);
         }
         const assistantMsg: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {

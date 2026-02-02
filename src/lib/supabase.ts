@@ -213,6 +213,10 @@ export interface PreCadastroProfileRow {
   wakeTime?: string | null;
   sleepTime?: string | null;
   workoutTime?: string | null;
+  /** Duração do treino em minutos (coluna workout_duration no banco). */
+  workout_duration?: number | null;
+  /** Alergias ou aversões alimentares (coluna allergies no banco). */
+  allergies?: string[] | null;
 }
 
 /**
@@ -227,13 +231,15 @@ export async function getPreCadastroProfile(userId: string): Promise<PreCadastro
       .maybeSingle();
 
     if (error) {
-      console.warn('[Supabase] Erro ao buscar perfil pre-cadastro:', error.message);
+      console.error('[Supabase] Erro ao buscar perfil (getPreCadastroProfile):', error.message, 'code:', error.code, 'details:', error.details);
       return null;
     }
     return data as PreCadastroProfileRow | null;
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    console.warn('[Supabase] Exceção ao buscar perfil pre-cadastro:', message);
+    console.error('[Supabase] Exceção ao buscar perfil (getPreCadastroProfile):', e);
+    if (e instanceof Error) {
+      console.error('[Supabase] Mensagem:', e.message, 'Stack:', e.stack);
+    }
     return null;
   }
 }
