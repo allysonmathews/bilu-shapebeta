@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useUser } from '../context/UserContext';
 import { regenerateAllPlansAsync } from '../context/PlanContext';
 import { supabase } from '../lib/supabase';
@@ -167,8 +167,11 @@ export const ProfileView: React.FC = () => {
     }
   }, [isEditing, onboardingData]);
 
-  const handleSave = async () => {
-    if (!onboardingData) return;
+  const savingRef = useRef(false);
+
+  const handleSave = useCallback(async () => {
+    if (!onboardingData || savingRef.current) return;
+    savingRef.current = true;
 
     const updatedData: OnboardingData = {
       ...onboardingData,
@@ -200,56 +203,51 @@ export const ProfileView: React.FC = () => {
       },
     };
 
-    setOnboardingData(updatedData);
-
-    // Persistir todos os campos do perfil permanentemente no Supabase (inclui objective e workout_location)
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user?.id) {
-      const { error } = await supabase
-        .from('profiles')
-        .upsert(
-          {
-            id: session.user.id,
-            updated_at: new Date().toISOString(),
-            weight: updatedData.biometrics.weight ?? null,
-            height: updatedData.biometrics.height ?? null,
-            age: updatedData.biometrics.age ?? null,
-            biotype: updatedData.biometrics.biotype ?? null,
-            gender: updatedData.biometrics.gender ?? null,
-            objective: updatedData.goals.primary ?? null,
-            workout_location: updatedData.preferences.location ?? null,
-            meals_per_day: updatedData.preferences.mealsPerDay ?? null,
-            wake_up_time: updatedData.preferences.wakeTime ?? null,
-            sleep_time: updatedData.preferences.sleepTime ?? null,
-            workout_time: updatedData.preferences.workoutTime ?? null,
-            days_per_week: updatedData.preferences.workoutDaysPerWeek ?? null,
-            workout_duration: updatedData.preferences.workoutDuration ?? null,
-            allergies: updatedData.restrictions.allergies?.length ? updatedData.restrictions.allergies : null,
-          },
-          { onConflict: 'id' }
-        );
-      if (error) {
-        console.error('[ProfileView] Erro ao salvar perfil no Supabase:', error.message, 'code:', error.code, 'details:', error.details);
-      } else {
-        // Sincronizar estado local com o banco (evita rollback se houver refetch depois)
-        await refreshProfileFromSupabase();
-      }
-    }
-
-    // Regenerar o plano com os novos dados (dieta via IA)
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        const { error } = await supabase
+          .from('profiles')
+          .upsert(
+            {
+              id: session.user.id,
+              updated_at: new Date().toISOString(),
+              weight: updatedData.biometrics.weight ?? null,
+              height: updatedData.biometrics.height ?? null,
+              age: updatedData.biometrics.age ?? null,
+              biotype: updatedData.biometrics.biotype ?? null,
+              gender: updatedData.biometrics.gender ?? null,
+              objective: updatedData.goals.primary ?? null,
+              workout_location: updatedData.preferences.location ?? null,
+              meals_per_day: updatedData.preferences.mealsPerDay ?? null,
+              wake_up_time: updatedData.preferences.wakeTime ?? null,
+              sleep_time: updatedData.preferences.sleepTime ?? null,
+              workout_time: updatedData.preferences.workoutTime ?? null,
+              days_per_week: updatedData.preferences.workoutDaysPerWeek ?? null,
+              workout_duration: updatedData.preferences.workoutDuration ?? null,
+              allergies: updatedData.restrictions.allergies?.length ? updatedData.restrictions.allergies : null,
+            },
+            { onConflict: 'id' }
+          );
+        if (error) {
+          console.error('[ProfileView] Erro ao salvar perfil no Supabase:', error.message, 'code:', error.code, 'details:', error.details);
+        }
+      }
+
+      setOnboardingData(updatedData);
       const newPlan = await regenerateAllPlansAsync(updatedData, session?.access_token ?? null);
       setPlan(newPlan);
     } catch (error) {
       console.error('Erro ao regenerar plano:', error);
+    } finally {
+      savingRef.current = false;
     }
 
     setIsEditing(false);
     setShowInjuryMap(false);
     setShowSuccessMessage(true);
     setTimeout(() => setShowSuccessMessage(false), 3000);
-  };
+  }, [onboardingData, formData, injuries, allergiesInput, setOnboardingData, setPlan]);
 
   const handleCancel = () => {
     setIsEditing(false);

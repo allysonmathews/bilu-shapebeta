@@ -60,6 +60,8 @@ export interface AICompletePlanPayload {
   allergies?: string[];
   /** Lesões e restrições físicas */
   injuries?: Restrictions['injuries'];
+  /** Exige Pré-Treino (30–60 min antes) e Pós-Treino (logo após) nas refeições */
+  requirePrePostWorkout?: boolean;
 }
 
 /**
@@ -85,6 +87,7 @@ export function onboardingToPayload(data: OnboardingData): AICompletePlanPayload
     sleepTime: preferences.sleepTime,
     allergies: restrictions.allergies,
     injuries: restrictions.injuries,
+    requirePrePostWorkout: true,
   };
 }
 
@@ -163,53 +166,354 @@ function toDietProfilePayload(payload: AICompletePlanPayload): Record<string, un
     sleep_time: payload.sleepTime,
     meals_per_day: payload.mealsPerDay,
     allergies: payload.allergies ?? [],
+    require_pre_post_workout: true,
+    pre_workout_minutes_before: 45,
+    post_workout_required: true,
   };
 }
 
-/** Treino básico de failover quando o backend retorna apenas dieta (API antiga). */
+/** Exercícios por grupo muscular e local (para failover). Base: ~8–10 min/exercício. */
+const FAILOVER_EXERCISES: Record<string, Record<string, Omit<AIPlannerExercise, 'sets' | 'reps'>[]>> = {
+  chest: {
+    gym: [
+      { name: 'Supino Reto', rest: 90, instructions: 'Deite no banco, empurre a barra com controle.' },
+      { name: 'Supino Inclinado', rest: 90, instructions: 'Banco inclinado 45°, empurre a barra.' },
+      { name: 'Crucifixo com Halteres', rest: 60, instructions: 'Abra os braços com halteres.' },
+      { name: 'Flexão de Braço', rest: 60, instructions: 'Mãos na largura dos ombros.' },
+      { name: 'Supino Declinado', rest: 90, instructions: 'Banco declinado, empurre a barra.' },
+      { name: 'Crucifixo na Polia', rest: 60, instructions: 'Abra os braços na polia baixa.' },
+      { name: 'Crossover', rest: 60, instructions: 'Cruze os cabos na frente do peito.' },
+      { name: 'Supino com Halteres', rest: 90, instructions: 'Empurre os halteres no banco plano.' },
+      { name: 'Pull-over', rest: 60, instructions: 'Haltere atrás da cabeça, desça e suba.' },
+      { name: 'Flexão Diamante', rest: 60, instructions: 'Mãos juntas sob o peitoral.' },
+    ],
+    home: [
+      { name: 'Flexão de Braço', rest: 60, instructions: 'Mãos na largura dos ombros.' },
+      { name: 'Flexão Inclinada', rest: 60, instructions: 'Mãos no banco, pés no chão.' },
+      { name: 'Flexão Declinada', rest: 60, instructions: 'Pés elevados, mãos no chão.' },
+      { name: 'Flexão com Apoio nos Joelhos', rest: 60, instructions: 'Versão facilitada.' },
+      { name: 'Flexão Explosiva', rest: 60, instructions: 'Empurre forte e troque mãos no ar.' },
+    ],
+    park: [
+      { name: 'Flexão de Braço', rest: 60, instructions: 'Mãos na largura dos ombros.' },
+      { name: 'Paralelas', rest: 90, instructions: 'Apoie nas barras, desça com controle.' },
+      { name: 'Flexão Inclinada', rest: 60, instructions: 'Mãos no banco do parque.' },
+      { name: 'Flexão com Pés Elevados', rest: 60, instructions: 'Pés no banco.' },
+    ],
+  },
+  back: {
+    gym: [
+      { name: 'Remada Curvada', rest: 90, instructions: 'Puxe a barra até o abdômen.' },
+      { name: 'Puxada Frontal', rest: 90, instructions: 'Puxe a barra até o peito na polia.' },
+      { name: 'Remada Unilateral', rest: 60, instructions: 'Um braço por vez, puxe o halter.' },
+      { name: 'Barra Fixa', rest: 90, instructions: 'Puxe o corpo até o queixo passar da barra.' },
+      { name: 'Puxada Atrás', rest: 90, instructions: 'Puxe a barra atrás da nuca.' },
+      { name: 'Remada no Smith', rest: 90, instructions: 'Remada com barra no Smith.' },
+      { name: 'Remada Cavalinho', rest: 60, instructions: 'Tronco inclinado, puxe halteres.' },
+      { name: 'Puxada Triângulo', rest: 90, instructions: 'Puxada com pegada em triângulo.' },
+      { name: 'Remada Baixa', rest: 90, instructions: 'Puxe a barra na polia baixa.' },
+      { name: 'Puxada Unilateral', rest: 60, instructions: 'Um braço por vez na polia.' },
+    ],
+    home: [
+      { name: 'Puxada com Elástico', rest: 60, instructions: 'Prenda elástico, puxe em direção ao peito.' },
+      { name: 'Remada com Elástico', rest: 60, instructions: 'Pés no elástico, puxe com os braços.' },
+      { name: 'Superman', rest: 45, instructions: 'Deite de bruços, eleve braços e pernas.' },
+      { name: 'Remada Invertida', rest: 60, instructions: 'Deitado, puxe o corpo na mesa.' },
+    ],
+    park: [
+      { name: 'Barra Fixa', rest: 90, instructions: 'Puxe o corpo até o queixo passar da barra.' },
+      { name: 'Remada com Elástico', rest: 60, instructions: 'Prenda elástico na barra.' },
+      { name: 'Puxada com Elástico', rest: 60, instructions: 'Elástico preso em ponto alto.' },
+    ],
+  },
+  legs: {
+    gym: [
+      { name: 'Agachamento Livre', rest: 90, instructions: 'Desça até coxas paralelas ao chão.' },
+      { name: 'Leg Press', rest: 90, instructions: 'Empurre a plataforma com as pernas.' },
+      { name: 'Flexão de Pernas', rest: 60, instructions: 'Flexione as pernas na máquina.' },
+      { name: 'Panturrilha em Pé', rest: 45, instructions: 'Eleve o corpo na ponta dos pés.' },
+    ],
+    home: [
+      { name: 'Agachamento com Peso Corporal', rest: 60, instructions: 'Desça até coxas paralelas.' },
+      { name: 'Lunges', rest: 60, instructions: 'Alternando pernas, dê um passo à frente.' },
+    ],
+    park: [
+      { name: 'Agachamento com Peso Corporal', rest: 60, instructions: 'Desça até coxas paralelas.' },
+      { name: 'Lunges', rest: 60, instructions: 'Alternando pernas.' },
+    ],
+  },
+  /** Pernas foco quadríceps (Dia C do split A-E). */
+  legs_quad: {
+    gym: [
+      { name: 'Agachamento Livre', rest: 90, instructions: 'Desça até coxas paralelas ao chão.' },
+      { name: 'Leg Press', rest: 90, instructions: 'Empurre a plataforma com as pernas.' },
+      { name: 'Cadeira Extensora', rest: 60, instructions: 'Estenda as pernas na máquina.' },
+      { name: 'Agachamento Búlgaro', rest: 60, instructions: 'Perna posterior no banco, desça.' },
+      { name: 'Panturrilha em Pé', rest: 45, instructions: 'Eleve o corpo na ponta dos pés.' },
+      { name: 'Panturrilha Sentado', rest: 45, instructions: 'Eleve na máquina sentado.' },
+      { name: 'Hack Squat', rest: 90, instructions: 'Agachamento na máquina inclinada.' },
+      { name: 'Afundo com Barra', rest: 60, instructions: 'Passo à frente, desça o joelho traseiro.' },
+      { name: 'Leg Press Unilateral', rest: 60, instructions: 'Uma perna por vez na plataforma.' },
+      { name: 'Cadeira Extensora Unilateral', rest: 60, instructions: 'Estenda uma perna por vez.' },
+    ],
+    home: [
+      { name: 'Agachamento com Peso Corporal', rest: 60, instructions: 'Desça até coxas paralelas.' },
+      { name: 'Lunges', rest: 60, instructions: 'Alternando pernas, dê um passo à frente.' },
+      { name: 'Agachamento Búlgaro', rest: 60, instructions: 'Perna posterior elevada.' },
+      { name: 'Panturrilha em Pé', rest: 45, instructions: 'Eleve na ponta dos pés.' },
+      { name: 'Agachamento Sumo', rest: 60, instructions: 'Pés largos, desça com controle.' },
+      { name: 'Subida em Step', rest: 60, instructions: 'Subida alternada em banco ou step.' },
+    ],
+    park: [
+      { name: 'Agachamento com Peso Corporal', rest: 60, instructions: 'Desça até coxas paralelas.' },
+      { name: 'Lunges', rest: 60, instructions: 'Alternando pernas.' },
+      { name: 'Agachamento Búlgaro', rest: 60, instructions: 'Perna posterior no banco.' },
+      { name: 'Panturrilha em Pé', rest: 45, instructions: 'Eleve na ponta dos pés.' },
+      { name: 'Agachamento Sumo', rest: 60, instructions: 'Pés largos, desça com controle.' },
+    ],
+  },
+  /** Pernas foco isquiotibiais + braços (Dia E do split A-E). */
+  legs_hamstring_arms: {
+    gym: [
+      { name: 'Flexão de Pernas (Máquina)', rest: 60, instructions: 'Flexione as pernas na máquina (isquiotibiais).' },
+      { name: 'Stiff', rest: 90, instructions: 'Mantenha pernas quase retas, desça o tronco.' },
+      { name: 'Cadeira Flexora', rest: 60, instructions: 'Flexione as pernas sentado.' },
+      { name: 'Rosca Direta', rest: 60, instructions: 'Flexione os cotovelos, levante a barra.' },
+      { name: 'Rosca Martelo', rest: 60, instructions: 'Halteres com pegada neutra.' },
+      { name: 'Tríceps Pulley', rest: 60, instructions: 'Estenda os braços na polia.' },
+      { name: 'Tríceps Banco', rest: 45, instructions: 'Apoie mãos no banco, desça o corpo.' },
+      { name: 'Rosca Concentrada', rest: 60, instructions: 'Cotovelo apoiado na coxa, flexione o braço.' },
+      { name: 'Tríceps Francês', rest: 60, instructions: 'Haltere atrás da cabeça, estenda os braços.' },
+      { name: 'Flexão de Pernas em Pé', rest: 60, instructions: 'Uma perna por vez na máquina.' },
+      { name: 'Rosca Scott', rest: 60, instructions: 'Braços apoiados no banco Scott.' },
+      { name: 'Tríceps Corda', rest: 60, instructions: 'Estenda os braços na polia com corda.' },
+    ],
+    home: [
+      { name: 'Stiff com Halteres', rest: 60, instructions: 'Desça o tronco mantendo pernas levemente flexionadas.' },
+      { name: 'Good Morning', rest: 60, instructions: 'Incline o tronco à frente com quadril estável.' },
+      { name: 'Tríceps Banco', rest: 45, instructions: 'Apoie mãos no banco, desça o corpo.' },
+      { name: 'Rosca com Elástico', rest: 60, instructions: 'Flexione cotovelos puxando o elástico.' },
+      { name: 'Perna Curta com Elástico', rest: 60, instructions: 'Flexione o joelho puxando o elástico.' },
+      { name: 'Rosca 21', rest: 60, instructions: 'Rosca em três amplitudes (7+7+7).' },
+    ],
+    park: [
+      { name: 'Good Morning', rest: 60, instructions: 'Incline o tronco à frente.' },
+      { name: 'Tríceps Banco', rest: 45, instructions: 'Apoie mãos no banco, desça o corpo.' },
+      { name: 'Rosca com Elástico', rest: 60, instructions: 'Flexione cotovelos puxando o elástico.' },
+      { name: 'Stiff com Peso Corporal', rest: 60, instructions: 'Incline o tronco mantendo pernas levemente flexionadas.' },
+      { name: 'Tríceps Mergulho', rest: 45, instructions: 'Apoie nas barras paralelas, desça o corpo.' },
+    ],
+  },
+  shoulders: {
+    gym: [
+      { name: 'Desenvolvimento com Halteres', rest: 60, instructions: 'Empurre halteres acima da cabeça.' },
+      { name: 'Elevação Lateral', rest: 60, instructions: 'Levante halteres lateralmente.' },
+      { name: 'Encolhimento com Halteres', rest: 45, instructions: 'Eleve os ombros (trapézio).' },
+      { name: 'Remada Alta', rest: 60, instructions: 'Puxe a barra até o queixo (ombros e trapézio).' },
+      { name: 'Elevação Frontal', rest: 60, instructions: 'Levante halteres à frente do corpo.' },
+      { name: 'Desenvolvimento Militar', rest: 90, instructions: 'Barra acima da cabeça, em pé ou sentado.' },
+      { name: 'Elevação Lateral na Polia', rest: 60, instructions: 'Levante o cabo lateralmente.' },
+      { name: 'Encolhimento com Barra', rest: 45, instructions: 'Barra atrás do corpo, eleve os ombros.' },
+      { name: 'Face Pull', rest: 60, instructions: 'Puxe a corda em direção ao rosto.' },
+      { name: 'Desenvolvimento Arnold', rest: 60, instructions: 'Halteres com rotação durante o movimento.' },
+      { name: 'Elevação Inclinada', rest: 60, instructions: 'Tronco inclinado, eleve halteres lateralmente.' },
+      { name: 'Remada Alta com Halteres', rest: 60, instructions: 'Halteres até o queixo.' },
+    ],
+    home: [
+      { name: 'Pike Push-up', rest: 60, instructions: 'Flexão com quadril elevado em V.' },
+      { name: 'Encolhimento com Peso', rest: 45, instructions: 'Eleve os ombros segurando peso.' },
+      { name: 'Elevação Lateral com Elástico', rest: 60, instructions: 'Pise no elástico, levante os braços.' },
+      { name: 'Desenvolvimento com Garrafa', rest: 60, instructions: 'Empurre garrafas ou peso acima da cabeça.' },
+      { name: 'Y raise', rest: 60, instructions: 'De bruços, eleve os braços em Y.' },
+    ],
+    park: [
+      { name: 'Pike Push-up', rest: 60, instructions: 'Flexão com quadril elevado em V.' },
+      { name: 'Encolhimento com Peso', rest: 45, instructions: 'Eleve os ombros.' },
+      { name: 'Elevação Lateral com Elástico', rest: 60, instructions: 'Elástico preso, levante os braços.' },
+    ],
+  },
+  arms: {
+    gym: [
+      { name: 'Rosca Direta', rest: 60, instructions: 'Flexione os cotovelos, levante a barra.' },
+      { name: 'Rosca Martelo', rest: 60, instructions: 'Halteres com pegada neutra.' },
+      { name: 'Tríceps Pulley', rest: 60, instructions: 'Estenda os braços na polia.' },
+      { name: 'Tríceps Banco', rest: 45, instructions: 'Apoie mãos no banco, desça o corpo.' },
+    ],
+    home: [
+      { name: 'Tríceps Banco', rest: 45, instructions: 'Apoie mãos no banco, desça o corpo.' },
+    ],
+    park: [
+      { name: 'Tríceps Banco', rest: 45, instructions: 'Apoie mãos no banco, desça o corpo.' },
+    ],
+  },
+};
+
+/** Split por dia: A–E para 5 dias (Peito, Costas, Pernas, Ombros, Braços); rotação para outros. */
+const SPLIT_BY_DAYS: Record<number, { muscleGroups: string[]; key: string }[]> = {
+  3: [
+    { muscleGroups: ['Peito', 'Ombros', 'Tríceps'], key: 'chest' },
+    { muscleGroups: ['Costas', 'Bíceps'], key: 'back' },
+    { muscleGroups: ['Pernas'], key: 'legs' },
+  ],
+  4: [
+    { muscleGroups: ['Peito', 'Tríceps'], key: 'chest' },
+    { muscleGroups: ['Costas', 'Bíceps'], key: 'back' },
+    { muscleGroups: ['Pernas'], key: 'legs' },
+    { muscleGroups: ['Ombros'], key: 'shoulders' },
+  ],
+  /** Split A-E: 5 dias DIFERENTES, sem repetir grupo muscular em dias seguidos. */
+  5: [
+    { muscleGroups: ['Peito', 'Tríceps'], key: 'chest' },           // Dia A
+    { muscleGroups: ['Costas', 'Bíceps'], key: 'back' },            // Dia B
+    { muscleGroups: ['Pernas', 'Foco Quadríceps'], key: 'legs_quad' }, // Dia C
+    { muscleGroups: ['Ombros', 'Trapézio'], key: 'shoulders' },     // Dia D
+    { muscleGroups: ['Pernas', 'Foco Isquiotibiais', 'Braços'], key: 'legs_hamstring_arms' }, // Dia E
+  ],
+  6: [
+    { muscleGroups: ['Peito', 'Tríceps'], key: 'chest' },
+    { muscleGroups: ['Costas', 'Bíceps'], key: 'back' },
+    { muscleGroups: ['Pernas'], key: 'legs' },
+    { muscleGroups: ['Peito', 'Ombros'], key: 'chest' },
+    { muscleGroups: ['Costas', 'Braços'], key: 'back' },
+    { muscleGroups: ['Pernas'], key: 'legs' },
+  ],
+  7: [
+    { muscleGroups: ['Peito'], key: 'chest' },
+    { muscleGroups: ['Costas'], key: 'back' },
+    { muscleGroups: ['Pernas'], key: 'legs' },
+    { muscleGroups: ['Ombros'], key: 'shoulders' },
+    { muscleGroups: ['Braços'], key: 'arms' },
+    { muscleGroups: ['Peito', 'Costas'], key: 'chest' },
+    { muscleGroups: ['Pernas'], key: 'legs' },
+  ],
+};
+
+/** Volume real: minutos/9 exercícios por dia; para 100 min obrigatoriamente entre 10 e 12. */
+function exercisesPerDayFromDuration(minutes: number): number {
+  const raw = Math.floor(minutes / 9);
+  if (minutes >= 90) return Math.min(12, Math.max(10, raw));
+  return Math.min(15, Math.max(3, raw));
+}
+
+/** Treino de failover: volume real (min/9), split A–E sem repetição, cardio 25 min se weight_loss, progressão (Semana 2 > Semana 1). */
 function createFailoverWorkoutPlan(payload: AICompletePlanPayload): AIPlannerWeek[] {
-  const days = payload.workoutDaysPerWeek || 3;
+  const days = Math.min(7, Math.max(1, payload.workoutDaysPerWeek || 3));
+  const duration = Math.max(30, payload.workoutDuration || 60);
   const location = payload.workoutLocation || 'gym';
+  const objective = payload.objective || 'hypertrophy';
+  const loc = location === 'home' ? 'home' : location === 'park' ? 'park' : 'gym';
 
-  const homeExercises: AIPlannerExercise[] = [
-    { name: 'Flexão de Braço', sets: 3, reps: 12, rest: 60, instructions: 'Mãos na largura dos ombros, desça até o peito quase tocar o chão.' },
-    { name: 'Agachamento com Peso Corporal', sets: 3, reps: 15, rest: 60, instructions: 'Pés na largura dos ombros, desça até as coxas ficarem paralelas ao chão.' },
-    { name: 'Prancha', sets: 3, reps: 30, rest: 45, instructions: 'Mantenha a posição de flexão com o corpo alinhado por 30 segundos.' },
-    { name: 'Lunges', sets: 3, reps: 12, rest: 60, instructions: 'Alternando pernas, dê um passo à frente e desça o joelho traseiro.' },
-    { name: 'Abdominal Crunch', sets: 3, reps: 15, rest: 45, instructions: 'Deite, flexione o tronco em direção aos joelhos.' },
-  ];
+  const addCardio = objective === 'weight_loss';
+  const CARDIO_MINUTES = 25;
+  const cardioExercise: AIPlannerExercise = {
+    name: 'Cardio (Esteira/Corda/Corrida)',
+    sets: 1,
+    reps: CARDIO_MINUTES,
+    rest: 0,
+    instructions: `Cardio em ritmo moderado por ${CARDIO_MINUTES} minutos.`,
+  };
 
-  const gymExercises: AIPlannerExercise[] = [
-    { name: 'Supino Reto', sets: 3, reps: 10, rest: 90, instructions: 'Deite no banco, empurre a barra com controle.' },
-    { name: 'Remada Curvada', sets: 3, reps: 10, rest: 90, instructions: 'Incline o tronco, puxe a barra até o abdômen.' },
-    { name: 'Agachamento Livre', sets: 3, reps: 10, rest: 90, instructions: 'Desça até coxas paralelas ao chão.' },
-    { name: 'Desenvolvimento com Halteres', sets: 3, reps: 10, rest: 60, instructions: 'Empurre os halteres acima da cabeça.' },
-    { name: 'Prancha', sets: 2, reps: 45, rest: 45, instructions: 'Mantenha a posição alinhada por 45 segundos.' },
-  ];
+  const exercisesPerDay = exercisesPerDayFromDuration(duration);
+  const splits = SPLIT_BY_DAYS[days] ?? SPLIT_BY_DAYS[3];
 
-  const parkExercises: AIPlannerExercise[] = [
-    { name: 'Barra Fixa', sets: 3, reps: 8, rest: 90, instructions: 'Puxe o corpo até o queixo passar da barra.' },
-    { name: 'Paralelas', sets: 3, reps: 10, rest: 90, instructions: 'Apoie nas barras, desça o corpo com controle.' },
-    { name: 'Agachamento com Peso Corporal', sets: 3, reps: 15, rest: 60, instructions: 'Agache até as coxas ficarem paralelas.' },
-    { name: 'Flexão de Braço', sets: 3, reps: 12, rest: 60, instructions: 'Mãos na largura dos ombros.' },
-    { name: 'Corrida', sets: 1, reps: 10, rest: 0, instructions: 'Corra em ritmo moderado por 10 minutos.' },
-  ];
-
-  const exercises =
-    location === 'home' ? homeExercises
-    : location === 'park' ? parkExercises
-    : gymExercises;
+  const getExercisesForSplit = (
+    splitKey: string,
+    count: number,
+    baseSets: number,
+    baseReps: number
+  ): AIPlannerExercise[] => {
+    let pool = FAILOVER_EXERCISES[splitKey]?.[loc] ?? FAILOVER_EXERCISES.chest[loc];
+    if (pool.length < count && (splitKey === 'chest' || splitKey === 'back')) {
+      const extra = splitKey === 'chest'
+        ? (FAILOVER_EXERCISES.arms?.[loc] ?? []).filter((e) => e.name.includes('Tríceps'))
+        : (FAILOVER_EXERCISES.arms?.[loc] ?? []).filter((e) => e.name.includes('Rosca') || e.name.includes('Bíceps'));
+      pool = [...pool, ...extra];
+    }
+    while (pool.length < count) pool = [...pool, ...pool];
+    const selected = pool.slice(0, count);
+    return selected.map((e) => ({
+      ...e,
+      sets: baseSets,
+      reps: baseReps,
+    }));
+  };
 
   const dayNames = ['Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado', 'Domingo'];
 
-  return [1, 2, 3, 4].map((week) => ({
-    week,
-    workoutDays: Array.from({ length: days }, (_, i) => ({
-      dayName: dayNames[i % 7],
-      muscleGroups: ['Full Body'],
-      exercises: [...exercises],
-    })),
+  return [1, 2, 3, 4].map((week) => {
+    const baseSets = week === 1 ? 3 : week === 2 ? 4 : week === 3 ? 4 : 3;
+    const baseReps = week === 4 ? 12 : objective === 'weight_loss' ? 15 : 10;
+
+    const workoutDays = Array.from({ length: days }, (_, i) => {
+      const split = splits[i % splits.length];
+      const key = split.key;
+      const exercises: AIPlannerExercise[] = getExercisesForSplit(
+        key,
+        exercisesPerDay,
+        baseSets,
+        baseReps
+      );
+      if (addCardio) exercises.push(cardioExercise);
+      return {
+        dayName: dayNames[i % 7],
+        muscleGroups: 'muscleGroups' in split ? split.muscleGroups : ['Full Body'],
+        exercises,
+      };
+    });
+
+    return { week, workoutDays };
+  });
+}
+
+/** Soma minutos a um horário "HH:mm" (aceita delta negativo para Pré-Treino). */
+function addMinutesToTime(time: string, deltaMinutes: number): string {
+  const [h, m] = time.split(':').map(Number);
+  const total = h * 60 + m + deltaMinutes;
+  const nh = (Math.floor(total / 60) + 24) % 24;
+  const nm = ((total % 60) + 60) % 60;
+  return `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}`;
+}
+
+/** Dieta de failover: 5 refeições base + Pré-Treino (1h antes do workout_time) e Pós-Treino (logo após). */
+function createFailoverDiet(payload: AICompletePlanPayload): DietApiResponse {
+  const wakeTime = payload.wakeTime ?? '07:00';
+  const workoutTime = payload.workoutTime ?? '18:00';
+  const sleepTime = payload.sleepTime ?? '23:00';
+  const duration = payload.workoutDuration ?? 60;
+  const preTime = addMinutesToTime(workoutTime, -60);
+  const postTime = addMinutesToTime(workoutTime, duration);
+
+  const baseRefeicoes: Array<{ horario: string; titulo_refeicao: string }> = [
+    { horario: wakeTime, titulo_refeicao: 'Café da Manhã' },
+    { horario: '12:00', titulo_refeicao: 'Almoço' },
+    { horario: '15:00', titulo_refeicao: 'Lanche' },
+    { horario: '20:00', titulo_refeicao: 'Jantar' },
+    { horario: sleepTime, titulo_refeicao: 'Ceia' },
+    { horario: preTime, titulo_refeicao: 'Pré-Treino' },
+    { horario: postTime, titulo_refeicao: 'Pós-Treino' },
+  ];
+  const refeicoes = baseRefeicoes.map((r) => ({
+    horario: r.horario,
+    titulo_refeicao: r.titulo_refeicao,
+    lista_alimentos_com_quantidade: [
+      { alimento: 'Exemplo (personalize com a API)', quantidade: '1 porção', calorias: 200, proteina: 10, carboidratos: 20, gorduras: 8 },
+    ],
+    macros_da_ref: { calorias: 200, proteina: 10, carboidratos: 20, gorduras: 8 },
   }));
+
+  const tdee = 2000;
+  const meta = { calorias: 1800, proteina: 120, carboidratos: 180, gorduras: 60 };
+  return {
+    resumo_metabolico: {
+      tdee,
+      meta_calorias: meta.calorias,
+      meta_proteina: meta.proteina,
+      meta_carboidratos: meta.carboidratos,
+      meta_gorduras: meta.gorduras,
+    },
+    refeicoes,
+    lista_compras: [{ item: 'Lista gerada pela API quando disponível', quantidade: '-' }],
+  };
 }
 
 /** Indica se estamos usando o fallback para a API antiga (/api/diet). */
@@ -219,6 +523,8 @@ const isDietFallback =
 /**
  * Busca o plano completo (dieta + treino) da API unificada.
  * Envia o perfil completo do usuário e retorna ambos os planos.
+ * Em caso de falha da API, retorna plano mock (dieta + treino) para o usuário
+ * ver volume real, divisão A-E e refeições com Pré/Pós-Treino.
  *
  * @param profile - Perfil completo (AICompletePlanPayload ou OnboardingData)
  * @param accessToken - Token de autenticação (opcional)
@@ -230,10 +536,16 @@ export async function fetchCompletePlanFromApi(
   | { ok: true; diet: DietApiResponse; workout_plan: AIPlannerWeek[] }
   | { ok: false; error: string }
 > {
-  try {
-    const payload: AICompletePlanPayload =
-      'biometrics' in profile ? onboardingToPayload(profile) : profile;
+  const payload: AICompletePlanPayload =
+    'biometrics' in profile ? onboardingToPayload(profile) : profile;
 
+  const returnFailoverPlan = (): { ok: true; diet: DietApiResponse; workout_plan: AIPlannerWeek[] } => ({
+    ok: true,
+    diet: createFailoverDiet(payload),
+    workout_plan: createFailoverWorkoutPlan(payload),
+  });
+
+  try {
     const body = isDietFallback
       ? { profile: toDietProfilePayload(payload) }
       : { profile: payload };
@@ -254,30 +566,18 @@ export async function fetchCompletePlanFromApi(
     const looksLikeHtml = text.trim().startsWith('<');
 
     if (!isJsonContentType || looksLikeHtml) {
-      return {
-        ok: false,
-        error:
-          'O servidor de IA ainda não está configurado para o novo formato de treino e dieta.',
-      };
+      return returnFailoverPlan();
     }
 
     let data: unknown;
     try {
       data = JSON.parse(text);
     } catch {
-      return {
-        ok: false,
-        error:
-          'O servidor de IA ainda não está configurado para o novo formato de treino e dieta.',
-      };
+      return returnFailoverPlan();
     }
 
     if (!res.ok) {
-      const msg =
-        (data && typeof data === 'object' && 'error' in data
-          ? (data as { error?: string }).error
-          : null) ?? `Erro ${res.status}`;
-      return { ok: false, error: String(msg) };
+      return returnFailoverPlan();
     }
 
     const response = data as Record<string, unknown>;
@@ -287,7 +587,7 @@ export async function fetchCompletePlanFromApi(
       typeof response.diet !== 'object' ||
       !Array.isArray((response.diet as DietApiResponse).refeicoes)
     ) {
-      return { ok: false, error: 'Resposta inválida: dieta ausente ou malformada.' };
+      return returnFailoverPlan();
     }
 
     const diet = response.diet as DietApiResponse;
@@ -303,9 +603,7 @@ export async function fetchCompletePlanFromApi(
       diet,
       workout_plan,
     };
-  } catch (e) {
-    const msg =
-      e instanceof Error ? e.message : 'Erro ao conectar com a API do Bilu Shape.';
-    return { ok: false, error: msg };
+  } catch {
+    return returnFailoverPlan();
   }
 }

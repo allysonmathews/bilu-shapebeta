@@ -60,14 +60,16 @@ function dayNameToNumber(dayName: string): number {
 
 /**
  * Converte workout_plan da IA em WorkoutDay[].
- * Prioridade: dados da IA. Se o exercício não existe no mockExercises, exibe mesmo assim
- * usando os dados retornados pela IA.
+ * Cada exercício recebe ID único (exerciseId + week + day + index) para evitar chaves duplicadas no React.
+ * Se objetivo for weight_loss, garante bloco de cardio como último item com id cardio-final-{week}-{day}.
  */
 function mapWorkoutPlanToWorkoutDays(
   workoutPlan: AIPlannerWeek[],
-  defaultDuration: number
+  defaultDuration: number,
+  objective?: OnboardingData['goals']['primary']
 ): WorkoutDay[] {
   const workouts: WorkoutDay[] = [];
+  const addCardio = objective === 'weight_loss';
   for (const weekData of workoutPlan) {
     const weekNum = weekData.week ?? workouts.length + 1;
     for (let dayIdx = 0; dayIdx < weekData.workoutDays.length; dayIdx++) {
@@ -76,15 +78,17 @@ function mapWorkoutPlanToWorkoutDays(
       const dayNumber = (weekNum - 1) * 7 + dayOfWeek;
       const primaryMuscle = wd.muscleGroups?.[0] ? normalizeMuscleGroup(wd.muscleGroups[0]) : 'chest';
 
-      const exercises = (wd.exercises ?? []).map((ex: AIPlannerExercise, exIdx: number) => {
+      const baseExercises = (wd.exercises ?? []).map((ex: AIPlannerExercise, exIdx: number) => {
         const slug = ex.name.replace(/\s+/g, '-').toLowerCase().slice(0, 30);
-        const aiId = `ai-${weekNum}-${dayIdx}-${exIdx}-${slug}`;
+        const uniqueSuffix = `${weekNum}-${dayIdx}-${exIdx}`;
         const mock = mockExercises.find(
           (m) => m.name.toLowerCase().trim() === ex.name.toLowerCase().trim()
         );
+        const baseId = mock ? mock.id : `ai-${slug}`;
+        const uniqueId = `${baseId}-${uniqueSuffix}`;
         if (mock) {
           return {
-            id: mock.id,
+            id: uniqueId,
             name: mock.name,
             sets: ex.sets ?? 3,
             reps: ex.reps ?? 10,
@@ -95,7 +99,7 @@ function mapWorkoutPlanToWorkoutDays(
           };
         }
         return {
-          id: aiId,
+          id: uniqueId,
           name: ex.name,
           sets: ex.sets ?? 3,
           reps: ex.reps ?? 10,
@@ -106,13 +110,39 @@ function mapWorkoutPlanToWorkoutDays(
         };
       });
 
-      const duration = exercises.length > 0 ? exercises.length * 5 : defaultDuration;
+      let exercises = baseExercises;
+      const hasCardioAsLast = baseExercises.length > 0 &&
+        /cardio|esteira|corrida|corda/i.test(baseExercises[baseExercises.length - 1].name);
+      if (addCardio && !hasCardioAsLast) {
+        const cardioId = `cardio-final-${weekNum}-${dayIdx}`;
+        exercises = [
+          ...baseExercises,
+          {
+            id: cardioId,
+            name: 'Cardio (Esteira/Corda/Corrida)',
+            sets: 1,
+            reps: 25,
+            weight: undefined,
+            muscleGroup: 'calves' as MuscleGroup,
+            equipment: 'gym',
+            videoUrl: undefined,
+          },
+        ];
+      }
+
+      const duration =
+        exercises.length > 0
+          ? Math.round(exercises.length * 9)
+          : defaultDuration;
       workouts.push({
         id: `workout-${weekNum}-${dayOfWeek}`,
         day: dayNumber,
         week: weekNum,
         exercises,
-        duration: Math.min(duration, defaultDuration + 10),
+        duration: Math.min(
+          Math.max(duration, defaultDuration - 15),
+          defaultDuration + 20
+        ),
         completed: false,
       });
     }
@@ -146,6 +176,8 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   /** Gera plano completo via API unificada (dieta + treino). Assíncrono. */
   const generatePlanAsync = async (data: OnboardingData, accessToken?: string | null): Promise<FourWeekPlan> => {
+    const stableDuration = Number(data?.preferences?.workoutDuration) || 100;
+    const objective = data?.goals?.primary;
     console.log('Payload enviado:', data);
     const result = await fetchCompletePlanFromApi(data, accessToken);
 
@@ -164,9 +196,8 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       }
 
       const plan = mapDietToFourWeekPlan(result.diet);
-      const defaultDuration = data.preferences.workoutDuration;
       const workoutDays = hasValidWorkout
-        ? mapWorkoutPlanToWorkoutDays(result.workout_plan, defaultDuration)
+        ? mapWorkoutPlanToWorkoutDays(result.workout_plan, stableDuration, objective)
         : [];
 
       const weeks: WeeklyPlan[] = plan.weeks.map((w, i) => ({
@@ -370,11 +401,11 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Selecionar substituto aleatório
     const replacement = candidates[Math.floor(Math.random() * candidates.length)];
 
-    // 6. SUBSTITUIÇÃO CIRÚRGICA: Usar splice para garantir que o tamanho do array NÃO mude
+    // 6. SUBSTITUIÇÃO CIRÚRGICA: manter ID único do exercício atual para evitar chaves duplicadas
     const newExercises = [...workout.exercises];
     newExercises[exerciseIndex] = {
-      ...currentExercise, // Manter sets, reps, weight do exercício atual
-      id: replacement.id,
+      ...currentExercise,
+      id: currentExercise.id,
       name: replacement.name,
       muscleGroup: replacement.muscleGroup,
       equipment: replacement.equipment,

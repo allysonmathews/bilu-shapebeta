@@ -90,95 +90,102 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return {};
   });
 
-  // Persistir no localStorage
+  const lastUserJsonRef = useRef<string | null>(null);
+  const lastOnboardingJsonRef = useRef<string | null>(null);
+  const lastPlanJsonRef = useRef<string | null>(null);
+  const lastProgressJsonRef = useRef<string | null>(null);
+  const lastExerciseProgressJsonRef = useRef<string | null>(null);
+  const lastCompletedMealsJsonRef = useRef<string | null>(null);
+
+  // Persistir no localStorage apenas quando os dados mudarem (igualdade profunda via JSON)
   useEffect(() => {
-    localStorage.setItem('bilu_user', JSON.stringify(user));
+    const json = JSON.stringify(user);
+    if (lastUserJsonRef.current === json) return;
+    lastUserJsonRef.current = json;
+    localStorage.setItem('bilu_user', json);
   }, [user]);
 
   useEffect(() => {
-    if (onboardingData) {
-      localStorage.setItem('bilu_onboarding', JSON.stringify(onboardingData));
-    }
+    if (!onboardingData) return;
+    const json = JSON.stringify(onboardingData);
+    if (lastOnboardingJsonRef.current === json) return;
+    lastOnboardingJsonRef.current = json;
+    localStorage.setItem('bilu_onboarding', json);
   }, [onboardingData]);
 
   useEffect(() => {
-    if (plan) {
-      localStorage.setItem('bilu_plan', JSON.stringify(plan));
-    }
+    if (!plan) return;
+    const json = JSON.stringify(plan);
+    if (lastPlanJsonRef.current === json) return;
+    lastPlanJsonRef.current = json;
+    localStorage.setItem('bilu_plan', json);
   }, [plan]);
 
   useEffect(() => {
-    localStorage.setItem('bilu_progress', JSON.stringify(progress));
+    const json = JSON.stringify(progress);
+    if (lastProgressJsonRef.current === json) return;
+    lastProgressJsonRef.current = json;
+    localStorage.setItem('bilu_progress', json);
   }, [progress]);
 
   useEffect(() => {
-    localStorage.setItem('bilu_exercise_progress', JSON.stringify(exerciseProgress));
+    const json = JSON.stringify(exerciseProgress);
+    if (lastExerciseProgressJsonRef.current === json) return;
+    lastExerciseProgressJsonRef.current = json;
+    localStorage.setItem('bilu_exercise_progress', json);
   }, [exerciseProgress]);
 
   useEffect(() => {
-    // Converter Sets para arrays para salvar no localStorage
     const toSave: { [date: string]: string[] } = {};
     Object.keys(completedMeals).forEach(date => {
       toSave[date] = Array.from(completedMeals[date]);
     });
-    localStorage.setItem('bilu_completed_meals', JSON.stringify(toSave));
+    const json = JSON.stringify(toSave);
+    if (lastCompletedMealsJsonRef.current === json) return;
+    lastCompletedMealsJsonRef.current = json;
+    localStorage.setItem('bilu_completed_meals', json);
   }, [completedMeals]);
 
-  const setUser = (newUser: User) => {
+  const setUser = useCallback((newUser: User) => {
     setUserState(newUser);
-  };
+  }, []);
 
-  const setOnboardingData = (data: OnboardingData) => {
+  const setOnboardingData = useCallback((data: OnboardingData) => {
     setOnboardingDataState(data);
     setUserState(prev => ({ ...prev, onboardingCompleted: true }));
-  };
+  }, []);
 
-  const setPlan = (newPlan: FourWeekPlan) => {
+  const setPlan = useCallback((newPlan: FourWeekPlan) => {
     setPlanState(newPlan);
-  };
+  }, []);
 
-  const addProgressEntry = (entry: ProgressEntry) => {
+  const addProgressEntry = useCallback((entry: ProgressEntry) => {
     setProgress(prev => [...prev, entry].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()));
-  };
+  }, []);
 
-  const updateExerciseProgress = (exerciseId: string, exerciseName: string, date: string, sets: number, reps: number, weight: number) => {
+  const updateExerciseProgress = useCallback((exerciseId: string, exerciseName: string, date: string, sets: number, reps: number, weight: number) => {
     setExerciseProgress(prev => {
       const existing = prev.find(p => p.exerciseId === exerciseId);
       if (existing) {
-        // Verificar se já existe um registro para esta data
         const historyIndex = existing.history.findIndex(h => h.date === date);
-        
         if (historyIndex >= 0) {
-          // Atualizar registro existente (UPSERT)
-          return prev.map(p => 
+          return prev.map(p =>
             p.exerciseId === exerciseId
-              ? { 
-                  ...p, 
-                  exerciseName, 
-                  history: p.history.map((h, idx) => 
-                    idx === historyIndex 
-                      ? { date, sets, reps, weight } // Atualizar
-                      : h
-                  )
-                }
-              : p
-          );
-        } else {
-          // Adicionar novo registro ao histórico
-          return prev.map(p => 
-            p.exerciseId === exerciseId
-              ? { ...p, exerciseName, history: [...p.history, { date, sets, reps, weight }] }
+              ? { ...p, exerciseName, history: p.history.map((h, idx) => idx === historyIndex ? { date, sets, reps, weight } : h) }
               : p
           );
         }
-      } else {
-        // Criar novo exercício com histórico
-        return [...prev, { exerciseId, exerciseName, history: [{ date, sets, reps, weight }] }];
+        return prev.map(p =>
+          p.exerciseId === exerciseId
+            ? { ...p, exerciseName, history: [...p.history, { date, sets, reps, weight }] }
+            : p
+        );
       }
+      return [...prev, { exerciseId, exerciseName, history: [{ date, sets, reps, weight }] }];
     });
-  };
+  }, []);
 
-  const toggleMealCompletion = (date: string, mealId: string) => {
+  const toggleMealCompletion = useCallback((date: string, mealId: string) => {
     setCompletedMeals(prev => {
       const newCompleted = { ...prev };
       if (!newCompleted[date]) {
@@ -186,16 +193,14 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } else {
         newCompleted[date] = new Set(newCompleted[date]);
       }
-      
       if (newCompleted[date].has(mealId)) {
         newCompleted[date].delete(mealId);
       } else {
         newCompleted[date].add(mealId);
       }
-      
       return newCompleted;
     });
-  };
+  }, []);
 
   const clearProfileCheckResult = useCallback(() => {
     setProfileCheckResult(undefined);

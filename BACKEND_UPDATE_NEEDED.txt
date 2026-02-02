@@ -127,8 +127,14 @@ A resposta DEVE ser JSON com EXATAMENTE esta estrutura:
     - Calcular TDEE (Harris-Benedict ou similar)
     - Ajustar carboidratos conforme intensidade da semana (periodização)
     - Respeitar allergies[] - NUNCA incluir alimentos alérgicos
+    - OBRIGATÓRIO: Além das mealsPerDay refeições, incluir Pré-Treino (30-60 min
+      antes de workoutTime) e Pós-Treino (logo após o treino)
 
   Treino:
+    - VOLUME: 1 exercício a cada 8-10 min. Ex: workoutDuration=100 min → 10-12
+      exercícios (não apenas 5)
+    - SPLIT: 5 dias = A Peito, B Costas, C Pernas, D Ombros, E Braços (rotacionar)
+    - CARDIO: Se objective=weight_loss, adicionar 20-30 min de cardio ao final
     - Ler injuries[] - NUNCA prescrever exercícios que sobrecarreguem
       articulações lesionadas (severity: severe = excluir totalmente;
       moderate = evitar cargas livres pesadas)
@@ -137,6 +143,7 @@ A resposta DEVE ser JSON com EXATAMENTE esta estrutura:
       * park = barras fixas, paralelas, corrida
       * gym = equipamentos completos
     - Periodização: Semana 1 Adaptação, 2 Carga, 3 Intensidade, 4 Recuperação
+    - PROGRESSÃO: Cada semana diferente (não repetir Semana 1 idêntica)
     - workout_plan deve ter 4 semanas (week: 1, 2, 3, 4)
     - Cada semana com workoutDays.length = workoutDaysPerWeek
     - dayName em português: "Segunda-feira", "Terça-feira", etc.
