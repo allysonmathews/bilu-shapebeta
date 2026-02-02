@@ -1,19 +1,21 @@
 import React, { createContext, useContext, ReactNode } from 'react';
-import { OnboardingData, FourWeekPlan, WeeklyPlan, Meal, WorkoutDay, DailyMeals, DayOfWeek } from '../types';
-import { mockFoods, mockExercises, Exercise, findSimilarFood, MealTime, MuscleGroup, JointGroup } from '../data/mockDatabase';
-import {
-  calculateWorkoutStructure,
-  getSplitConfig,
-  violatesSynergy,
-  getRepsForExercise,
-  type SplitType,
-  type WorkoutStructure,
-  type Goal as WorkoutGoal,
-} from '../logic/workoutGenerator';
-import { fetchDietFromApi, type DietProfilePayload } from '../lib/dietApi';
+import { OnboardingData, FourWeekPlan, WeeklyPlan, Meal, WorkoutDay, DayOfWeek } from '../types';
+import { mockFoods, mockExercises, findSimilarFood, MealTime, MuscleGroup } from '../data/mockDatabase';
+import { fetchCompletePlanFromApi } from '../lib/aiPlannerApi';
+import type { AIPlannerWeek, AIPlannerExercise } from '../lib/aiPlannerApi';
+import { mapDietToFourWeekPlan } from '../lib/dietApi';
+
+/*
+ * REMOVIDO (simplificação pela API unificada):
+ * - calculateWorkoutStructure, getSplitConfig, violatesSynergy, getRepsForExercise (workoutGenerator)
+ * - Toda a lógica manual de geração de exercícios (generateWorkouts ~450 linhas):
+ *   mapeamento de lesões, filtros de segurança, seleção por split/agonista-sinergista,
+ *   verificação de sinergia, pool de exercícios por local, regra 10 min/exercício.
+ * O treino agora vem diretamente do workout_plan retornado pela IA.
+ */
 
 interface PlanContextType {
-  /** Gera plano completo (dieta via IA Groq + treino local). Assíncrono. */
+  /** Gera plano completo (dieta + treino via API unificada). Assíncrono. */
   generatePlanAsync: (data: OnboardingData, accessToken?: string | null) => Promise<FourWeekPlan>;
   swapFoodItem: (plan: FourWeekPlan, weekIndex: number, dayOfWeek: DayOfWeek, mealIndex: number, currentFoodId: string) => FourWeekPlan;
   swapExercise: (plan: FourWeekPlan, weekIndex: number, dayIndex: number, exerciseIndex: number, currentExerciseId: string) => FourWeekPlan;
@@ -23,731 +25,167 @@ const PlanContext = createContext<PlanContextType | undefined>(undefined);
 
 let exportedRegenerateAllPlansAsync: ((profile: OnboardingData, accessToken?: string | null) => Promise<FourWeekPlan>) | null = null;
 
-/** Converte OnboardingData em DietProfilePayload para a API de dieta. */
-function onboardingToDietProfile(data: OnboardingData): DietProfilePayload {
-  const objMap: Record<string, string> = {
-    weight_loss: 'emagrecimento',
-    hypertrophy: 'hipertrofia',
-    maintenance: 'manutenção',
-    strength: 'força',
-    endurance: 'resistência',
-    muscle_definition: 'definição muscular',
+/** Mapeia nomes de grupos musculares (PT/EN) para o formato interno. */
+function normalizeMuscleGroup(name: string): MuscleGroup {
+  const n = name.toLowerCase().trim();
+  const map: Record<string, MuscleGroup> = {
+    peito: 'chest', chest: 'chest',
+    costas: 'back', back: 'back',
+    ombros: 'shoulders', shoulders: 'shoulders',
+    bíceps: 'biceps', biceps: 'biceps',
+    tríceps: 'triceps', triceps: 'triceps',
+    antebraço: 'forearms', forearms: 'forearms',
+    abdômen: 'abs', abdominal: 'abs', abs: 'abs',
+    lombar: 'lower_back', 'lower back': 'lower_back', lower_back: 'lower_back',
+    glúteos: 'glutes', glutes: 'glutes',
+    quadríceps: 'quads', quads: 'quads', coxa: 'quads',
+    posterior: 'hamstrings', hamstrings: 'hamstrings', isquiotibiais: 'hamstrings',
+    panturrilha: 'calves', calves: 'calves', gastrocnêmio: 'calves',
   };
-  const bioMap: Record<string, string> = {
-    ectomorph: 'ectomorfo',
-    mesomorph: 'mesomorfo',
-    endomorph: 'endomorfo',
-  };
-  return {
-    weight: data.biometrics.weight,
-    height: data.biometrics.height,
-    age: data.biometrics.age,
-    gender: data.biometrics.gender === 'female' ? 'feminino' : 'masculino',
-    biotype: bioMap[data.biometrics.biotype ?? 'mesomorph'] ?? 'mesomorfo',
-    objective: objMap[data.goals.primary] ?? 'hipertrofia',
-    workout_time: data.preferences.workoutTime,
-    workout_duration: data.preferences.workoutDuration,
-    wake_up_time: data.preferences.wakeTime,
-    sleep_time: data.preferences.sleepTime,
-    meals_per_day: data.preferences.mealsPerDay,
-    allergies: data.restrictions?.allergies ?? [],
-  };
+  return (map[n] ?? 'chest') as MuscleGroup;
 }
 
-export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  // Gerar treinos inteligentes baseado em objetivo, frequência e tempo
-  const generateWorkouts = (data: OnboardingData, week: number): WorkoutDay[] => {
-    
-    const workouts: WorkoutDay[] = [];
-    const daysPerWeek = data.preferences.workoutDaysPerWeek;
-    const timePerWorkout = data.preferences.workoutDuration; // em minutos
-    const location = data.preferences.location;
-    const goal = data.goals.primary;
-    const injuries = data.restrictions.injuries || [];
+/** Mapeia dayName para número do dia da semana (1=Segunda). */
+function dayNameToNumber(dayName: string): number {
+  const n = dayName.toLowerCase();
+  if (n.includes('segunda') || n.includes('monday')) return 1;
+  if (n.includes('terça') || n.includes('tuesday')) return 2;
+  if (n.includes('quarta') || n.includes('wednesday')) return 3;
+  if (n.includes('quinta') || n.includes('thursday')) return 4;
+  if (n.includes('sexta') || n.includes('friday')) return 5;
+  if (n.includes('sábado') || n.includes('saturday')) return 6;
+  if (n.includes('domingo') || n.includes('sunday')) return 7;
+  return 1;
+}
 
-    // ============================================
-    // STEP 1: MAPEAR LESÕES PARA GRUPOS MUSCULARES E ARTICULAÇÕES
-    // ============================================
-    // Mapear IDs do InjuryMap para MuscleGroup e JointGroup
-    const mapInjuryLocationToMuscleGroup = (location: string): MuscleGroup | null => {
-      // Mapear IDs de áreas musculares do InjuryMap
-      const muscleIdMap: Record<string, MuscleGroup> = {
-        'chest-front': 'chest',
-        'back-back': 'back',
-        'shoulders-front-left': 'shoulders',
-        'shoulders-front-right': 'shoulders',
-        'shoulders-back-left': 'shoulders',
-        'shoulders-back-right': 'shoulders',
-        'biceps-front-left': 'biceps',
-        'biceps-front-right': 'biceps',
-        'biceps-back-left': 'biceps',
-        'biceps-back-right': 'biceps',
-        'triceps-front-left': 'triceps',
-        'triceps-front-right': 'triceps',
-        'triceps-back-left': 'triceps',
-        'triceps-back-right': 'triceps',
-        'forearms-front-left': 'forearms',
-        'forearms-front-right': 'forearms',
-        'forearms-back-left': 'forearms',
-        'forearms-back-right': 'forearms',
-        'abs-front': 'abs',
-        'lower_back-back': 'lower_back',
-        'quads-front-left': 'quads',
-        'quads-front-right': 'quads',
-        'glutes-back-left': 'glutes',
-        'glutes-back-right': 'glutes',
-        'hamstrings-back-left': 'hamstrings',
-        'hamstrings-back-right': 'hamstrings',
-        'calves-front-left': 'calves',
-        'calves-front-right': 'calves',
-        'calves-back-left': 'calves',
-        'calves-back-right': 'calves',
-      };
-      return muscleIdMap[location] || null;
-    };
+/**
+ * Converte workout_plan da IA em WorkoutDay[].
+ * Prioridade: dados da IA. Se o exercício não existe no mockExercises, exibe mesmo assim
+ * usando os dados retornados pela IA.
+ */
+function mapWorkoutPlanToWorkoutDays(
+  workoutPlan: AIPlannerWeek[],
+  defaultDuration: number
+): WorkoutDay[] {
+  const workouts: WorkoutDay[] = [];
+  for (const weekData of workoutPlan) {
+    const weekNum = weekData.week ?? workouts.length + 1;
+    for (let dayIdx = 0; dayIdx < weekData.workoutDays.length; dayIdx++) {
+      const wd = weekData.workoutDays[dayIdx];
+      const dayOfWeek = dayNameToNumber(wd.dayName);
+      const dayNumber = (weekNum - 1) * 7 + dayOfWeek;
+      const primaryMuscle = wd.muscleGroups?.[0] ? normalizeMuscleGroup(wd.muscleGroups[0]) : 'chest';
 
-    const mapInjuryLocationToJointGroup = (location: string): JointGroup | null => {
-      // Mapear IDs de articulações do InjuryMap
-      const jointIdMap: Record<string, JointGroup> = {
-        'shoulder-front-left': 'shoulder_joint',
-        'shoulder-front-right': 'shoulder_joint',
-        'shoulder-back-left': 'shoulder_joint',
-        'shoulder-back-right': 'shoulder_joint',
-        'elbow-front-left': 'elbow',
-        'elbow-front-right': 'elbow',
-        'elbow-back-left': 'elbow',
-        'elbow-back-right': 'elbow',
-        'wrist-front-left': 'wrist',
-        'wrist-front-right': 'wrist',
-        'wrist-back-left': 'wrist',
-        'wrist-back-right': 'wrist',
-        'hip-front-left': 'hip',
-        'hip-front-right': 'hip',
-        'hip-back-left': 'hip',
-        'hip-back-right': 'hip',
-        'knee-front-left': 'knee',
-        'knee-front-right': 'knee',
-        'knee-back-left': 'knee',
-        'knee-back-right': 'knee',
-        'ankle-front-left': 'ankle',
-        'ankle-front-right': 'ankle',
-        'ankle-back-left': 'ankle',
-        'ankle-back-right': 'ankle',
-        'spine-front': 'spine',
-        'spine-back': 'spine',
-        'scapula-back-left': 'scapula',
-        'scapula-back-right': 'scapula',
-      };
-      return jointIdMap[location] || null;
-    };
-
-    // Converter severidade: 'mild' -> 'low', 'moderate' -> 'medium', 'severe' -> 'high'
-    const severityMap: Record<'mild' | 'moderate' | 'severe', 'low' | 'medium' | 'high'> = {
-      mild: 'low',
-      moderate: 'medium',
-      severe: 'high',
-    };
-
-    // Extrair grupos musculares e articulações lesionados por severidade
-    const injuredMuscleGroups = new Set<MuscleGroup>();
-    const injuredJoints = new Set<JointGroup>();
-    const highSeverityMuscles = new Set<MuscleGroup>();
-    const highSeverityJoints = new Set<JointGroup>();
-    const mediumSeverityMuscles = new Set<MuscleGroup>();
-    const mediumSeverityJoints = new Set<JointGroup>();
-
-    injuries.forEach(injury => {
-      const severity = severityMap[injury.severity] || 'low';
-      const muscleGroup = mapInjuryLocationToMuscleGroup(injury.location);
-      const jointGroup = mapInjuryLocationToJointGroup(injury.location);
-
-      if (muscleGroup) {
-        injuredMuscleGroups.add(muscleGroup);
-        if (severity === 'high') {
-          highSeverityMuscles.add(muscleGroup);
-        } else if (severity === 'medium') {
-          mediumSeverityMuscles.add(muscleGroup);
-        }
-      }
-
-      if (jointGroup) {
-        injuredJoints.add(jointGroup);
-        if (severity === 'high') {
-          highSeverityJoints.add(jointGroup);
-        } else if (severity === 'medium') {
-          mediumSeverityJoints.add(jointGroup);
-        }
-      }
-    });
-
-    // ============================================
-    // ESTRUTURA DO TREINO (Objetivo + Dias + Duração)
-    // ============================================
-    const structure: WorkoutStructure = calculateWorkoutStructure(
-      goal as WorkoutGoal,
-      daysPerWeek,
-      timePerWorkout
-    );
-
-    // ============================================
-    // STEP 2: DETERMINAR O SPLIT (Frequency Logic)
-    // 5 dias: A(Peito), B(Costas), C(Pernas), D(Ombros), E(Braços) – sinergia respeitada
-    // ============================================
-    const { split, workoutDays } = getSplitConfig(daysPerWeek);
-
-    // ============================================
-    // STEP 3: FILTRO DE SEGURANÇA (LESÕES)
-    // ============================================
-    // Criar pool de exercícios seguros baseado nas lesões
-    const getSafeExercises = (baseExercises: Exercise[]): Exercise[] => {
-      return baseExercises.filter(exercise => {
-        // Severidade ALTA: Excluir TOTALMENTE exercícios que tenham o músculo lesionado como muscleGroup OU a articulação como impactedJoints
-        if (highSeverityMuscles.has(exercise.muscleGroup)) {
-          return false;
-        }
-        if (exercise.impactedJoints.some(joint => highSeverityJoints.has(joint))) {
-          return false;
-        }
-
-        // Severidade MÉDIA: Excluir exercícios livres/pesados (equipment: 'gym' + type: 'strength')
-        // Manter apenas máquinas ou peso do corpo
-        if (mediumSeverityMuscles.has(exercise.muscleGroup) || 
-            exercise.impactedJoints.some(joint => mediumSeverityJoints.has(joint))) {
-          if (exercise.equipment === 'gym' && exercise.type === 'strength') {
-            return false;
-          }
-        }
-
-        // Severidade LEVE: Manter o exercício (já passou pelos filtros acima)
-        return true;
-      });
-    };
-
-    // ============================================
-    // STEP 4: EXERCISE SELECTION (Location Logic)
-    // ============================================
-    let availableExercises: Exercise[];
-
-    if (location === 'home') {
-      availableExercises = mockExercises.filter(e => 
-        e.equipment === 'home' || e.equipment === 'bodyweight'
-      );
-    } else if (location === 'park') {
-      availableExercises = mockExercises.filter(e => 
-        e.equipment === 'park' || e.equipment === 'bodyweight' || e.type === 'cardio'
-      );
-    } else if (location === 'gym') {
-      availableExercises = [...mockExercises];
-    } else {
-      // Mixed: Todos os exercícios
-      availableExercises = [...mockExercises];
-    }
-
-    // Aplicar filtro de segurança
-    const safeExercises = getSafeExercises(availableExercises);
-
-    // ============================================
-    // STEP 5: MAPEAR SPLITS PARA GRUPOS MUSCULARES (AGONISTAS E SINERGISTAS)
-    // ============================================
-    // Estrutura: { agonist: [grupos principais], synergist: [grupos secundários] }
-    // Volume: Agonista recebe mais exercícios (3), Sinergista recebe menos (2)
-    interface MuscleGroupConfig {
-      agonist: MuscleGroup[];
-      synergist: MuscleGroup[];
-    }
-
-    const muscleGroupMap: Record<SplitType, MuscleGroupConfig | MuscleGroup[]> = {
-      full_body: ['chest', 'back', 'shoulders', 'biceps', 'triceps', 'abs', 'quads', 'hamstrings', 'glutes', 'calves'],
-      full_body_focus_a: ['chest', 'back', 'quads', 'hamstrings'], // Foco em peito, costas e pernas
-      full_body_focus_b: ['shoulders', 'biceps', 'triceps', 'glutes', 'calves'], // Foco em braços e pernas
-      full_body_focus_c: ['chest', 'back', 'abs', 'quads', 'calves'], // Foco em core e pernas
-      push: ['chest', 'shoulders', 'triceps'],
-      pull: ['back', 'biceps'],
-      legs: ['quads', 'hamstrings', 'glutes', 'calves'],
-      // 4 DIAS: Agonistas e Sinergistas (Fisiologicamente correto)
-      chest_triceps: {
-        agonist: ['chest'], // 3 exercícios
-        synergist: ['triceps'], // 2 exercícios
-      },
-      back_biceps: {
-        agonist: ['back'], // 3 exercícios
-        synergist: ['biceps'], // 2 exercícios
-      },
-      shoulders_traps: {
-        agonist: ['shoulders'], // 3 exercícios
-        synergist: ['back'], // Trapézio está no grupo 'back', 2 exercícios focados em trapézio
-      },
-      legs_complete: {
-        agonist: ['quads'], // 3 exercícios
-        synergist: [], // Hamstrings e calves são tratados separadamente no caso especial
-      },
-      // 3 DIAS: PPL (Push, Pull, Legs)
-      push_ppl: {
-        agonist: ['chest', 'shoulders'], // Peito: 2 exercícios, Ombros: 1 exercício (total 3)
-        synergist: ['triceps'], // 2 exercícios
-      },
-      pull_ppl: {
-        agonist: ['back'], // 3 exercícios
-        synergist: ['biceps', 'forearms'], // 2 exercícios (1 bíceps, 1 antebraço)
-      },
-      legs_ppl: {
-        agonist: ['quads', 'hamstrings', 'glutes', 'calves'], // Pernas completas
-        synergist: [],
-      },
-      // Outros splits (mantidos para compatibilidade)
-      upper: ['chest', 'back', 'shoulders', 'biceps', 'triceps'],
-      lower: ['quads', 'hamstrings', 'glutes', 'calves', 'abs'],
-      // 5 DIAS: A(Peito), B(Costas), C(Pernas), D(Ombros), E(Braços) – sem sinergista no mesmo dia
-      chest: ['chest'],
-      back: ['back'],
-      shoulders_abs: ['shoulders', 'abs'],
-      arms: ['biceps', 'triceps'],
-    };
-
-    // ============================================
-    // STEP 6 & 7: VOLUME E TEMPO (regra 10 min/exercício)
-    // structure.maxExercises = limite rígido; nunca exceder.
-    // structure.cardioMinutes = 10 para Perda de Peso, 0 caso contrário.
-    // ============================================
-    const maxExercises = structure.maxExercises;
-    const cardioTime = structure.cardioMinutes;
-
-    // ============================================
-    // STEP 8: FUNÇÃO PARA SELECIONAR EXERCÍCIOS (COM AGONISTAS E SINERGISTAS)
-    // ============================================
-    // Rastrear grupos musculares treinados por dia para evitar treinar em dias consecutivos
-    const trainedMuscleGroupsByDay: MuscleGroup[][] = [];
-
-    const selectExercisesForMuscleGroup = (
-      muscleGroup: MuscleGroup,
-      count: number,
-      dayIndex: number,
-      usedExerciseIds: Set<string>,
-      prioritizeCompound: boolean = false
-    ): Exercise[] => {
-      // Filtrar exercícios que correspondem ao grupo muscular
-      let candidates = safeExercises.filter(e => {
-        const matchesMuscle = e.muscleGroup === muscleGroup || 
-                              (e.secondaryMuscles && e.secondaryMuscles.includes(muscleGroup));
-        return matchesMuscle && e.type !== 'cardio' && !usedExerciseIds.has(e.id);
-      });
-
-      // Priorizar movimentos compostos se solicitado
-      if (prioritizeCompound) {
-        candidates.sort((a, b) => (b.isCompound ? 1 : 0) - (a.isCompound ? 1 : 0));
-      }
-
-      // Para Hypertrophy/Strength, priorizar movimentos compostos de força
-      if (goal === 'hypertrophy' || goal === 'strength') {
-        candidates = candidates.filter(e => 
-          e.type === 'strength' && 
-          (e.goalTags.includes('hypertrophy') || e.goalTags.includes('strength'))
+      const exercises = (wd.exercises ?? []).map((ex: AIPlannerExercise, exIdx: number) => {
+        const slug = ex.name.replace(/\s+/g, '-').toLowerCase().slice(0, 30);
+        const aiId = `ai-${weekNum}-${dayIdx}-${exIdx}-${slug}`;
+        const mock = mockExercises.find(
+          (m) => m.name.toLowerCase().trim() === ex.name.toLowerCase().trim()
         );
-        // Ordenar: compostos primeiro
-        candidates.sort((a, b) => (b.isCompound ? 1 : 0) - (a.isCompound ? 1 : 0));
-      }
-
-      // Remover duplicatas
-      const unique = Array.from(new Map(candidates.map(e => [e.id, e])).values());
-      
-      // Variar exercícios entre dias usando seed baseado em week e dayIndex
-      const seed = (week - 1) * 7 + dayIndex;
-      const shuffled = [...unique].sort((a, b) => {
-        const hashA = (a.id.charCodeAt(0) + seed) % unique.length;
-        const hashB = (b.id.charCodeAt(0) + seed) % unique.length;
-        return hashA - hashB;
-      });
-
-      return shuffled.slice(0, count);
-    };
-
-    const selectExercises = (
-      config: MuscleGroupConfig | MuscleGroup[], 
-      dayIndex: number,
-      usedExerciseIds: Set<string>
-    ): Exercise[] => {
-      const selectedExercises: Exercise[] = [];
-      const currentDayMuscles: MuscleGroup[] = [];
-
-      // Se for configuração de Agonista/Sinergista
-      if (Array.isArray(config)) {
-        // Split tradicional: distribuir maxExercises entre grupos (regra 10 min/exercício)
-        const targetMuscles = config;
-        const perGroup = Math.max(1, Math.floor(maxExercises / targetMuscles.length));
-        targetMuscles.forEach(muscle => {
-          currentDayMuscles.push(muscle);
-          const exercises = selectExercisesForMuscleGroup(
-            muscle,
-            perGroup,
-            dayIndex,
-            usedExerciseIds,
-            split[dayIndex] === 'full_body' || split[dayIndex].startsWith('full_body_focus')
-          );
-          exercises.forEach(ex => {
-            selectedExercises.push(ex);
-            usedExerciseIds.add(ex.id);
-          });
-        });
-      } else {
-        // Configuração Agonista/Sinergista
-        const { agonist, synergist } = config;
-
-        // Selecionar exercícios para AGONISTAS (volume maior: 3 exercícios por grupo)
-        // Caso especial para push_ppl: peito recebe 2, ombros recebe 1
-        if (split[dayIndex] === 'push_ppl') {
-          // Peito: 2 exercícios
-          const chestExercises = selectExercisesForMuscleGroup(
-            'chest',
-            2,
-            dayIndex,
-            usedExerciseIds,
-            true
-          );
-          chestExercises.forEach(ex => {
-            selectedExercises.push(ex);
-            usedExerciseIds.add(ex.id);
-          });
-          currentDayMuscles.push('chest');
-          
-          // Ombros: 1 exercício
-          const shoulderExercises = selectExercisesForMuscleGroup(
-            'shoulders',
-            1,
-            dayIndex,
-            usedExerciseIds,
-            true
-          );
-          shoulderExercises.forEach(ex => {
-            selectedExercises.push(ex);
-            usedExerciseIds.add(ex.id);
-          });
-          currentDayMuscles.push('shoulders');
-        } else {
-          // Outros splits: 3 exercícios por grupo agonista
-          agonist.forEach(muscle => {
-            currentDayMuscles.push(muscle);
-            const exercises = selectExercisesForMuscleGroup(
-              muscle,
-              3, // Volume maior para agonista
-              dayIndex,
-              usedExerciseIds,
-              true // Priorizar compostos para agonistas
-            );
-            exercises.forEach(ex => {
-              selectedExercises.push(ex);
-              usedExerciseIds.add(ex.id);
-            });
-          });
+        if (mock) {
+          return {
+            id: mock.id,
+            name: mock.name,
+            sets: ex.sets ?? 3,
+            reps: ex.reps ?? 10,
+            weight: undefined,
+            muscleGroup: mock.muscleGroup,
+            equipment: mock.equipment,
+            videoUrl: mock.videoUrl,
+          };
         }
-
-        // Selecionar exercícios para SINERGISTAS (volume menor: 2 exercícios por grupo)
-        // Caso especial para pull_ppl: bíceps recebe 1, antebraço recebe 1
-        if (split[dayIndex] === 'pull_ppl') {
-          // Bíceps: 1 exercício
-          const bicepsExercises = selectExercisesForMuscleGroup(
-            'biceps',
-            1,
-            dayIndex,
-            usedExerciseIds,
-            false
-          );
-          bicepsExercises.forEach(ex => {
-            selectedExercises.push(ex);
-            usedExerciseIds.add(ex.id);
-          });
-          currentDayMuscles.push('biceps');
-          
-          // Antebraço: 1 exercício (se disponível)
-          const forearmExercises = selectExercisesForMuscleGroup(
-            'forearms',
-            1,
-            dayIndex,
-            usedExerciseIds,
-            false
-          );
-          forearmExercises.forEach(ex => {
-            selectedExercises.push(ex);
-            usedExerciseIds.add(ex.id);
-          });
-          if (forearmExercises.length > 0) {
-            currentDayMuscles.push('forearms');
-          }
-        } else {
-          // Outros splits: 2 exercícios por grupo sinergista
-          synergist.forEach(muscle => {
-            // Pular hamstrings e calves em legs_complete (tratados separadamente)
-            if (split[dayIndex] === 'legs_complete' && (muscle === 'hamstrings' || muscle === 'calves')) {
-              return;
-            }
-            currentDayMuscles.push(muscle);
-            const exercises = selectExercisesForMuscleGroup(
-              muscle,
-              2, // Volume menor para sinergista
-              dayIndex,
-              usedExerciseIds,
-              false
-            );
-            exercises.forEach(ex => {
-              selectedExercises.push(ex);
-              usedExerciseIds.add(ex.id);
-            });
-          });
-        }
-
-        // Caso especial: legs_complete - ajustar volumes
-        // Quadríceps já está em agonist (3 exercícios)
-        // Hamstrings: 2 exercícios (sinergista)
-        // Panturrilhas: 1 exercício (sinergista)
-        if (split[dayIndex] === 'legs_complete') {
-          currentDayMuscles.push('hamstrings');
-          const hamstringsExercises = selectExercisesForMuscleGroup(
-            'hamstrings',
-            2,
-            dayIndex,
-            usedExerciseIds,
-            false
-          );
-          hamstringsExercises.forEach(ex => {
-            selectedExercises.push(ex);
-            usedExerciseIds.add(ex.id);
-          });
-          
-          currentDayMuscles.push('calves');
-          const calvesExercises = selectExercisesForMuscleGroup(
-            'calves',
-            1,
-            dayIndex,
-            usedExerciseIds,
-            false
-          );
-          calvesExercises.forEach(ex => {
-            selectedExercises.push(ex);
-            usedExerciseIds.add(ex.id);
-          });
-        }
-
-        // Caso especial: shoulders_traps - incluir exercícios de costas focados em trapézio
-        if (split[dayIndex] === 'shoulders_traps') {
-          // Buscar exercícios de costas que também trabalham trapézio
-          const trapExercises = safeExercises.filter(e => 
-            e.muscleGroup === 'back' && 
-            !usedExerciseIds.has(e.id) &&
-            e.type !== 'cardio' &&
-            (e.name.toLowerCase().includes('trap') || 
-             e.name.toLowerCase().includes('encolhimento') ||
-             e.secondaryMuscles?.includes('shoulders'))
-          );
-          if (trapExercises.length > 0) {
-            const seed = (week - 1) * 7 + dayIndex;
-            const selected = trapExercises[seed % trapExercises.length];
-            selectedExercises.push(selected);
-            usedExerciseIds.add(selected.id);
-            currentDayMuscles.push('back');
-          }
-        }
-      }
-
-      return selectedExercises;
-    };
-
-    // ============================================
-    // STEP 9: GERAR TREINOS (GARANTINDO PREENCHIMENTO E RECUPERAÇÃO)
-    // ============================================
-    // Garantir que EXATAMENTE daysPerWeek treinos sejam criados
-    for (let i = 0; i < split.length; i++) {
-      const dayOfWeek = workoutDays[i];
-      const dayNumber = (week - 1) * 7 + dayOfWeek;
-      const currentSplit = split[i];
-      const muscleConfig = muscleGroupMap[currentSplit];
-
-      // Verificar se grupos musculares foram treinados no dia anterior (evitar treinar em dias consecutivos)
-      const previousDayMuscles = i > 0 ? trainedMuscleGroupsByDay[i - 1] : [];
-      
-      // Conjunto para evitar repetições no mesmo dia
-      const usedExerciseIds = new Set<string>();
-
-      // Selecionar exercícios baseado na configuração (Agonista/Sinergista ou tradicional)
-      let selectedExercises = selectExercises(muscleConfig, i, usedExerciseIds);
-
-      // Verificar e remover conflitos: treino no dia anterior + SINERGIA (anti-bug)
-      // Nunca Bíceps no dia seguinte a Costas, nem Tríceps no dia seguinte a Peito.
-      if (previousDayMuscles.length > 0 && !['push', 'pull', 'legs'].includes(currentSplit)) {
-        selectedExercises = selectedExercises.filter(ex => {
-          const muscleTrainedYesterday = previousDayMuscles.includes(ex.muscleGroup);
-          if (muscleTrainedYesterday) return false;
-          // Regra de sinergia: excluir Bíceps se Costas ontem, Tríceps se Peito ontem
-          if (violatesSynergy(ex.muscleGroup, previousDayMuscles)) return false;
-          return true;
-        });
-      }
-
-      // Limite rígido: NUNCA exceder maxExercises (regra 10 min/exercício)
-      if (selectedExercises.length > maxExercises) {
-        selectedExercises = selectedExercises.slice(0, maxExercises);
-      }
-
-      // Atualizar grupos treinados com base nos exercícios finais (após filtro/slice)
-      trainedMuscleGroupsByDay[i] = [...new Set(selectedExercises.map(e => e.muscleGroup))];
-
-      const isAgonistSynergistSplit = !Array.isArray(muscleConfig);
-      const minExercises = Math.min(isAgonistSynergistSplit ? 5 : 6, maxExercises);
-
-      while (selectedExercises.length < minExercises && selectedExercises.length < maxExercises) {
-        let foundNew = false;
-
-        // Para pernas completas, garantir que temos todos os grupos
-        if (currentSplit === 'legs' || currentSplit === 'lower' || currentSplit === 'legs_complete' || currentSplit === 'legs_ppl') {
-          const legGroups: MuscleGroup[] = ['quads', 'hamstrings', 'glutes', 'calves'];
-          for (const legGroup of legGroups) {
-            if (selectedExercises.some(e => e.muscleGroup === legGroup)) continue;
-            
-            // Verificar se foi treinado no dia anterior
-            if (previousDayMuscles.includes(legGroup)) continue;
-            
-            const legExercises = safeExercises.filter(e => 
-              e.muscleGroup === legGroup && 
-              !usedExerciseIds.has(e.id) &&
-              e.type !== 'cardio'
-            );
-            if (legExercises.length > 0 && selectedExercises.length < maxExercises) {
-              const seed = (week - 1) * 7 + i;
-              const exercise = legExercises[seed % legExercises.length];
-              selectedExercises.push(exercise);
-              usedExerciseIds.add(exercise.id);
-              foundNew = true;
-              if (selectedExercises.length >= minExercises) break;
-            }
-          }
-        }
-
-        if (!foundNew && selectedExercises.length < minExercises && selectedExercises.length < maxExercises) {
-          // Determinar grupos musculares alvo baseado no split
-          let targetMuscles: MuscleGroup[] = [];
-          if (Array.isArray(muscleConfig)) {
-            targetMuscles = muscleConfig;
-          } else {
-            targetMuscles = [...muscleConfig.agonist, ...muscleConfig.synergist];
-          }
-
-          // Buscar exercícios de grupos musculares relacionados ou secundários
-          const relatedExercises = safeExercises.filter(e => {
-            const isRelated = targetMuscles.some(m => 
-              e.muscleGroup === m || 
-              (e.secondaryMuscles && e.secondaryMuscles.includes(m))
-            );
-            const wasTrainedYesterday = previousDayMuscles.includes(e.muscleGroup);
-            return isRelated && 
-                   !usedExerciseIds.has(e.id) && 
-                   e.type !== 'cardio' &&
-                   !selectedExercises.some(se => se.id === e.id) &&
-                   !wasTrainedYesterday &&
-                   !violatesSynergy(e.muscleGroup, previousDayMuscles);
-          });
-
-          if (relatedExercises.length > 0 && selectedExercises.length < maxExercises) {
-            const seed = (week - 1) * 7 + i;
-            const exercise = relatedExercises[seed % relatedExercises.length];
-            selectedExercises.push(exercise);
-            usedExerciseIds.add(exercise.id);
-            foundNew = true;
-          }
-        }
-
-        if (!foundNew && selectedExercises.length < minExercises && selectedExercises.length < maxExercises) {
-          const availableExercises = safeExercises.filter(e => 
-            !usedExerciseIds.has(e.id) && 
-            e.type !== 'cardio' &&
-            !selectedExercises.some(se => se.id === e.id) &&
-            !previousDayMuscles.includes(e.muscleGroup) &&
-            !violatesSynergy(e.muscleGroup, previousDayMuscles)
-          );
-
-          if (availableExercises.length > 0) {
-            const seed = (week - 1) * 7 + i;
-            const exercise = availableExercises[seed % availableExercises.length];
-            selectedExercises.push(exercise);
-            usedExerciseIds.add(exercise.id);
-          } else {
-            // Se não há mais exercícios disponíveis, parar o loop
-            break;
-          }
-        }
-
-        // Se não encontrou nada novo, parar para evitar loop infinito
-        if (!foundNew) break;
-      }
-
-      // Criar exercícios com sets e reps da estrutura (Objetivo + Duração)
-      type WorkoutExercise = WorkoutDay['exercises'][number];
-      const exercises: WorkoutExercise[] = selectedExercises.map((ex) => {
-        const sets = structure.sets;
-        const reps = getRepsForExercise(structure, ex.isCompound ?? false);
         return {
-          id: ex.id,
+          id: aiId,
           name: ex.name,
-          sets,
-          reps,
+          sets: ex.sets ?? 3,
+          reps: ex.reps ?? 10,
           weight: undefined,
-          muscleGroup: ex.muscleGroup,
-          equipment: ex.equipment,
-          videoUrl: ex.videoUrl,
+          muscleGroup: primaryMuscle,
+          equipment: 'gym',
+          videoUrl: undefined,
         };
       });
 
-      // Se o plano requer Cardio (ex.: Perda de Peso +10 min ao final), adicionar sessão genérica
-      if (cardioTime > 0) {
-        exercises.push({
-          id: `cardio-session-${week}-${dayOfWeek}`,
-          name: location === 'park' ? 'Corrida/Caminhada' : location === 'home' ? 'Corda/Polichinelo' : 'Esteira/Corrida',
-          sets: 1,
-          reps: cardioTime,
-          weight: undefined,
-          muscleGroup: 'cardio',
-          equipment: location === 'park' ? 'park' : location === 'home' ? 'home' : 'gym',
-          videoUrl: undefined,
-        });
-      }
-
+      const duration = exercises.length > 0 ? exercises.length * 5 : defaultDuration;
       workouts.push({
-        id: `workout-${week}-${dayOfWeek}`,
+        id: `workout-${weekNum}-${dayOfWeek}`,
         day: dayNumber,
-        week,
+        week: weekNum,
         exercises,
-        duration: structure.durationMinutes,
+        duration: Math.min(duration, defaultDuration + 10),
         completed: false,
       });
     }
+  }
+  return workouts;
+}
 
-    return workouts;
-  };
+export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  /** Plano padrão quando a API retorna incompleto ou ocorre erro de processamento. */
+  const getDefaultFourWeekPlan = (): FourWeekPlan => ({
+    weeks: Array.from({ length: 4 }, (_, i) => ({
+      week: i + 1,
+      meals: [],
+      dailyMeals: {
+        monday: [],
+        tuesday: [],
+        wednesday: [],
+        thursday: [],
+        friday: [],
+        saturday: [],
+        sunday: [],
+      },
+      workouts: [],
+      totalCalories: 0,
+      totalProtein: 0,
+      totalCarbs: 0,
+      totalFat: 0,
+    })),
+    startDate: new Date().toISOString(),
+  });
 
-  /** Gera plano completo (dieta via IA Groq + treino local). Assíncrono. */
+  /** Gera plano completo via API unificada (dieta + treino). Assíncrono. */
   const generatePlanAsync = async (data: OnboardingData, accessToken?: string | null): Promise<FourWeekPlan> => {
-    const profile = onboardingToDietProfile(data);
-    const result = await fetchDietFromApi(profile, accessToken);
+    console.log('Payload enviado:', data);
+    const result = await fetchCompletePlanFromApi(data, accessToken);
 
     if (!result.ok) {
       throw new Error(result.error);
     }
 
-    const plan = result.plan;
-    const workoutPlan: WorkoutDay[] = [];
+    try {
+      const hasValidDiet =
+        result.diet?.refeicoes && Array.isArray(result.diet.refeicoes);
+      const hasValidWorkout =
+        result.workout_plan && Array.isArray(result.workout_plan);
 
-    for (let week = 1; week <= 4; week++) {
-      workoutPlan.push(...generateWorkouts(data, week));
+      if (!hasValidDiet) {
+        return getDefaultFourWeekPlan();
+      }
+
+      const plan = mapDietToFourWeekPlan(result.diet);
+      const defaultDuration = data.preferences.workoutDuration;
+      const workoutDays = hasValidWorkout
+        ? mapWorkoutPlanToWorkoutDays(result.workout_plan, defaultDuration)
+        : [];
+
+      const weeks: WeeklyPlan[] = plan.weeks.map((w, i) => ({
+        ...w,
+        workouts: workoutDays.filter((wk) => wk.week === i + 1),
+      }));
+
+      return {
+        weeks,
+        startDate: plan.startDate,
+        dietaApi: plan.dietaApi,
+      };
+    } catch (e) {
+      console.warn('Erro ao processar resposta da API, usando plano padrão:', e);
+      return getDefaultFourWeekPlan();
     }
-
-    const weeks: WeeklyPlan[] = plan.weeks.map((w, i) => ({
-      ...w,
-      workouts: workoutPlan.filter(wk => wk.week === i + 1),
-    }));
-
-    return {
-      weeks,
-      startDate: plan.startDate,
-      dietaApi: plan.dietaApi,
-    };
   };
+
+  // swapFoodItem e swapExercise mantidos - funcionam com dados da dieta/treino (IA ou mock)
 
   // Função global para trocar um alimento no plano
   const swapFoodItem = (
@@ -778,7 +216,7 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const currentFood = meal.foods[foodIndex];
     
-    // Encontrar alimento original no mockDatabase
+    // Encontrar alimento original no mockDatabase (ou usar dados da IA se id começar com ai-)
     const originalFood = mockFoods.find(f => f.id === currentFoodId);
     
     if (!originalFood) {
@@ -813,11 +251,9 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const newMeal = { ...meal };
     const newFoods = [...meal.foods];
 
-    // Calcular nova quantidade mantendo proporção similar
     const oldQuantity = currentFood.quantity || 1;
-    const newQuantity = oldQuantity; // Manter mesma quantidade
+    const newQuantity = oldQuantity;
 
-    // Atualizar alimento
     newFoods[foodIndex] = {
       id: similarFood.id,
       name: similarFood.name,
@@ -828,7 +264,6 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       fat: similarFood.fat * newQuantity,
     };
 
-    // Recalcular totais da refeição
     const newTotalCalories = newFoods.reduce((sum, f) => sum + f.calories, 0);
     const newTotalProtein = newFoods.reduce((sum, f) => sum + f.protein, 0);
     const newTotalCarbs = newFoods.reduce((sum, f) => sum + f.carbs, 0);
@@ -843,7 +278,6 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     newDayMeals[mealIndex] = newMeal;
     newDailyMeals[dayOfWeek] = newDayMeals;
 
-    // Atualizar meals array para backward compatibility
     const newMeals: Meal[] = [
       ...newDailyMeals.monday,
       ...newDailyMeals.tuesday,
@@ -854,7 +288,6 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       ...newDailyMeals.sunday,
     ];
 
-    // Recalcular totais da semana (usando segunda-feira como referência)
     const mondayMeals = newDailyMeals.monday;
     const newTotalCaloriesWeek = mondayMeals.reduce((sum, m) => sum + m.totalCalories, 0);
     const newTotalProteinWeek = mondayMeals.reduce((sum, m) => sum + m.totalProtein, 0);

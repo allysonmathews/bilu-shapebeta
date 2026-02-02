@@ -1,0 +1,171 @@
+================================================================================
+  ESPECIFICAÇÕES PARA IMPLEMENTAÇÃO DA ROTA /api/complete-plan
+  Bilu Shape - Backend Update
+================================================================================
+
+O frontend espera uma rota POST /api/complete-plan que retorne dieta E treino
+em uma única chamada. Atualmente o backend só possui /api/diet.
+
+Quando VITE_AI_PLANNER_API_URL não está definida, o frontend faz fallback para
+/api/diet e gera um treino básico localmente. Para usar a IA no treino também,
+implemente a rota abaixo.
+
+--------------------------------------------------------------------------------
+1. ROTA
+--------------------------------------------------------------------------------
+
+  POST /api/complete-plan
+
+  Headers:
+    Content-Type: application/json
+    Authorization: Bearer <token> (opcional)
+
+--------------------------------------------------------------------------------
+2. BODY (REQUEST) - AICompletePlanPayload
+--------------------------------------------------------------------------------
+
+O frontend envia:
+
+  {
+    "profile": {
+      "weight": number,           // kg
+      "height": number,           // cm
+      "age": number,
+      "objective": string,        // "weight_loss" | "hypertrophy" | "endurance" | "maintenance" | "strength" | "muscle_definition"
+      "level": string,            // opcional
+      "workoutLocation": string,  // "gym" | "home" | "park" | "mixed"
+      "workoutDaysPerWeek": number,
+      "workoutDuration": number,  // minutos
+      "bodyFat": number,          // opcional, %
+      "gender": string,           // opcional: "male" | "female" | "other"
+      "biotype": string,          // opcional: "ectomorph" | "mesomorph" | "endomorph"
+      "mealsPerDay": number,      // opcional
+      "wakeTime": string,         // opcional, HH:mm
+      "workoutTime": string,      // opcional, HH:mm
+      "sleepTime": string,        // opcional, HH:mm
+      "allergies": string[],      // opcional
+      "injuries": [               // opcional - LESÕES (OBRIGATÓRIO RESPEITAR)
+        {
+          "location": string,     // ex: "knee-front-left", "shoulder-front-right", "lower_back"
+          "severity": string      // "mild" | "moderate" | "severe"
+        }
+      ]
+    }
+  }
+
+--------------------------------------------------------------------------------
+3. RESPONSE (200 OK) - AICompletePlanResponse
+--------------------------------------------------------------------------------
+
+A resposta DEVE ser JSON com EXATAMENTE esta estrutura:
+
+  {
+    "diet": {
+      "resumo_metabolico": {
+        "tdee": number,
+        "meta_calorias": number,
+        "meta_proteina": number,
+        "meta_carboidratos": number,
+        "meta_gorduras": number
+      },
+      "refeicoes": [
+        {
+          "horario": "HH:mm",
+          "titulo_refeicao": "string",
+          "lista_alimentos_com_quantidade": [
+            {
+              "alimento": "string",
+              "quantidade": "string",
+              "calorias": number,
+              "proteina": number,
+              "carboidratos": number,
+              "gorduras": number
+            }
+          ],
+          "macros_da_ref": {
+            "calorias": number,
+            "proteina": number,
+            "carboidratos": number,
+            "gorduras": number
+          }
+        }
+      ],
+      "lista_compras": [
+        { "item": "string", "quantidade": "string" }
+      ]
+    },
+    "workout_plan": [
+      {
+        "week": 1,
+        "workoutDays": [
+          {
+            "dayName": "Segunda-feira",
+            "muscleGroups": ["Peito", "Tríceps"],
+            "exercises": [
+              {
+                "name": "string",
+                "sets": number,
+                "reps": number,
+                "rest": number,
+                "instructions": "string"
+              }
+            ]
+          }
+        ]
+      },
+      { "week": 2, "workoutDays": [...] },
+      { "week": 3, "workoutDays": [...] },
+      { "week": 4, "workoutDays": [...] }
+    ]
+  }
+
+--------------------------------------------------------------------------------
+4. REGRAS OBRIGATÓRIAS
+--------------------------------------------------------------------------------
+
+  Dieta:
+    - Calcular TDEE (Harris-Benedict ou similar)
+    - Ajustar carboidratos conforme intensidade da semana (periodização)
+    - Respeitar allergies[] - NUNCA incluir alimentos alérgicos
+
+  Treino:
+    - Ler injuries[] - NUNCA prescrever exercícios que sobrecarreguem
+      articulações lesionadas (severity: severe = excluir totalmente;
+      moderate = evitar cargas livres pesadas)
+    - Adaptar ao workoutLocation:
+      * home = peso do corpo, elásticos, halteres leves
+      * park = barras fixas, paralelas, corrida
+      * gym = equipamentos completos
+    - Periodização: Semana 1 Adaptação, 2 Carga, 3 Intensidade, 4 Recuperação
+    - workout_plan deve ter 4 semanas (week: 1, 2, 3, 4)
+    - Cada semana com workoutDays.length = workoutDaysPerWeek
+    - dayName em português: "Segunda-feira", "Terça-feira", etc.
+    - muscleGroups: array de strings (ex: "Peito", "Costas", "Pernas")
+    - Cada exercise: name, sets, reps, rest (segundos), instructions
+
+--------------------------------------------------------------------------------
+5. ERROS
+--------------------------------------------------------------------------------
+
+  Em caso de erro, retornar:
+    { "error": "string descritiva" }
+  Com status HTTP 4xx ou 5xx.
+
+  Content-Type DEVE ser application/json para o frontend processar corretamente.
+  Se retornar HTML (ex: 404), o app exibirá mensagem genérica.
+
+--------------------------------------------------------------------------------
+6. REFERÊNCIA
+--------------------------------------------------------------------------------
+
+  System Prompt da IA: ver PROMPT_MESTRE_IA.md na raiz do projeto.
+
+  Interfaces TypeScript (frontend):
+    - AICompletePlanPayload
+    - AICompletePlanResponse
+    - DietApiResponse
+    - AIPlannerWeek, AIPlannerWorkoutDay, AIPlannerExercise
+
+  Arquivo: src/lib/aiPlannerApi.ts
+
+--------------------------------------------------------------------------------
