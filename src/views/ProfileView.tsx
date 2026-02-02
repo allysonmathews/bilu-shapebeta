@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useUser } from '../context/UserContext';
-import { regenerateAllPlans } from '../context/PlanContext';
+import { regenerateAllPlansAsync } from '../context/PlanContext';
 import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -236,9 +236,10 @@ export const ProfileView: React.FC = () => {
       }
     }
 
-    // Regenerar o plano com os novos dados
+    // Regenerar o plano com os novos dados (dieta via IA)
     try {
-      const newPlan = regenerateAllPlans(updatedData);
+      const { data: { session } } = await supabase.auth.getSession();
+      const newPlan = await regenerateAllPlansAsync(updatedData, session?.access_token ?? null);
       setPlan(newPlan);
     } catch (error) {
       console.error('Erro ao regenerar plano:', error);

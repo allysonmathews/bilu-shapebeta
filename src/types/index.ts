@@ -110,6 +110,50 @@ export interface WeeklyPlan {
 export interface FourWeekPlan {
   weeks: WeeklyPlan[];
   startDate: string; // ISO date
+  /** Dados da API de dieta (resumo metabólico e lista de compras). */
+  dietaApi?: {
+    resumo_metabolico: {
+      tdee: number;
+      meta_calorias: number;
+      meta_proteina: number;
+      meta_carboidratos: number;
+      meta_gorduras: number;
+    };
+    lista_compras: Array<{ item: string; quantidade: string }>;
+  };
+}
+
+/** Resposta estruturada da API de dieta (Groq). */
+export interface DietApiResponse {
+  resumo_metabolico: {
+    tdee: number;
+    meta_calorias: number;
+    meta_proteina: number;
+    meta_carboidratos: number;
+    meta_gorduras: number;
+  };
+  refeicoes: Array<{
+    horario: string;
+    titulo_refeicao: string;
+    lista_alimentos_com_quantidade: Array<{
+      alimento: string;
+      quantidade: string;
+      calorias: number;
+      proteina: number;
+      carboidratos: number;
+      gorduras: number;
+    }>;
+    macros_da_ref: {
+      calorias: number;
+      proteina: number;
+      carboidratos: number;
+      gorduras: number;
+    };
+  }>;
+  lista_compras: Array<{
+    item: string;
+    quantidade: string;
+  }>;
 }
 
 export interface ProgressEntry {

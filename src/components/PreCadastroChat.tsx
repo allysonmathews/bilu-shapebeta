@@ -35,7 +35,7 @@ function isProfileComplete(content: string): boolean {
 
 export const PreCadastroChat: React.FC = () => {
   const { refreshProfileFromSupabase, setPlan } = useUser();
-  const { generatePlan } = usePlan();
+  const { generatePlanAsync } = usePlan();
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'assistant', content: INITIAL_AI_MESSAGE },
   ]);
@@ -57,16 +57,21 @@ export const PreCadastroChat: React.FC = () => {
   /** Redirecionamento automático: ao detectar perfil salvo, aguarda 2s e atualiza estado para exibir o app principal. */
   useEffect(() => {
     if (!profileSaved || isRedirecting) return;
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       setIsRedirecting(true);
       sessionStorage.setItem('bilu_initial_tab', 'evolucao');
-      refreshProfileFromSupabase((data) => {
-        setPlan(generatePlan(data));
+      const { data: { session } } = await supabase.auth.getSession();
+      refreshProfileFromSupabase(async (data) => {
+        try {
+          const plan = await generatePlanAsync(data, session?.access_token ?? null);
+          setPlan(plan);
+        } catch (e) {
+          console.error('Erro ao gerar plano:', e);
+        }
       });
-      // Após refresh, o App re-renderiza e mostra o app principal
     }, 2000);
     return () => clearTimeout(timer);
-  }, [profileSaved, isRedirecting, refreshProfileFromSupabase, generatePlan, setPlan]);
+  }, [profileSaved, isRedirecting, refreshProfileFromSupabase, generatePlanAsync, setPlan]);
 
   const handleSend = async () => {
     console.log('CHAMANDO API...');

@@ -14,16 +14,23 @@ import { translateMuscleGroup } from '../utils/muscleGroupTranslations';
 
 export const WorkoutView: React.FC = () => {
   const { plan, onboardingData, updateExerciseProgress, setPlan } = useUser();
-  const { swapExercise, generatePlan } = usePlan();
+  const { swapExercise, generatePlanAsync } = usePlan();
   const { saveWeight, finishWorkout, getWorkoutByDate, workoutHistory, weightHistory } = useProgress();
   
   // Auto-seed: Gerar plano padrão se não houver plano e houver onboardingData
   useEffect(() => {
     if (!plan && onboardingData) {
-      const defaultPlan = generatePlan(onboardingData);
-      setPlan(defaultPlan);
+      (async () => {
+        try {
+          const { data: { session } } = await import('../lib/supabase').then((m) => m.supabase.auth.getSession());
+          const defaultPlan = await generatePlanAsync(onboardingData, session?.access_token ?? null);
+          setPlan(defaultPlan);
+        } catch (e) {
+          console.error('Erro ao gerar plano:', e);
+        }
+      })();
     }
-  }, [plan, onboardingData, generatePlan, setPlan]);
+  }, [plan, onboardingData, generatePlanAsync, setPlan]);
 
   // Calcular índice visual do dia da semana (0 = Domingo, 1 = Segunda, ..., 6 = Sábado)
   // Para exibição visual: Dom=0, Seg=1, Ter=2, Qua=3, Qui=4, Sex=5, Sáb=6

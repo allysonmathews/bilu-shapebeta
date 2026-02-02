@@ -1,6 +1,6 @@
 import React, { createContext, useContext, ReactNode } from 'react';
-import { OnboardingData, FourWeekPlan, WeeklyPlan, Meal, WorkoutDay, DailyMeals, DayOfWeek, Preferences } from '../types';
-import { mockFoods, mockExercises, Food, Exercise, findSimilarFood, MealTime, MuscleGroup, JointGroup } from '../data/mockDatabase';
+import { OnboardingData, FourWeekPlan, WeeklyPlan, Meal, WorkoutDay, DailyMeals, DayOfWeek } from '../types';
+import { mockFoods, mockExercises, Exercise, findSimilarFood, MealTime, MuscleGroup, JointGroup } from '../data/mockDatabase';
 import {
   calculateWorkoutStructure,
   getSplitConfig,
@@ -10,761 +10,54 @@ import {
   type WorkoutStructure,
   type Goal as WorkoutGoal,
 } from '../logic/workoutGenerator';
-import { processMealsForDay } from '../logic/dietGenerator';
+import { fetchDietFromApi, type DietProfilePayload } from '../lib/dietApi';
 
 interface PlanContextType {
-  generatePlan: (data: OnboardingData) => FourWeekPlan;
+  /** Gera plano completo (dieta via IA Groq + treino local). Assíncrono. */
+  generatePlanAsync: (data: OnboardingData, accessToken?: string | null) => Promise<FourWeekPlan>;
   swapFoodItem: (plan: FourWeekPlan, weekIndex: number, dayOfWeek: DayOfWeek, mealIndex: number, currentFoodId: string) => FourWeekPlan;
   swapExercise: (plan: FourWeekPlan, weekIndex: number, dayIndex: number, exerciseIndex: number, currentExerciseId: string) => FourWeekPlan;
 }
 
 const PlanContext = createContext<PlanContextType | undefined>(undefined);
 
-// Referências para as funções exportadas (serão definidas dentro do componente)
-let exportedGenerateDietPlan: ((profile: OnboardingData) => { dailyMeals: DailyMeals[]; totals: { calories: number; protein: number; carbs: number; fat: number } }) | null = null;
-let exportedGenerateWorkoutPlan: ((profile: OnboardingData) => WorkoutDay[]) | null = null;
-let exportedRegenerateAllPlans: ((profile: OnboardingData) => FourWeekPlan) | null = null;
+let exportedRegenerateAllPlansAsync: ((profile: OnboardingData, accessToken?: string | null) => Promise<FourWeekPlan>) | null = null;
+
+/** Converte OnboardingData em DietProfilePayload para a API de dieta. */
+function onboardingToDietProfile(data: OnboardingData): DietProfilePayload {
+  const objMap: Record<string, string> = {
+    weight_loss: 'emagrecimento',
+    hypertrophy: 'hipertrofia',
+    maintenance: 'manutenção',
+    strength: 'força',
+    endurance: 'resistência',
+    muscle_definition: 'definição muscular',
+  };
+  const bioMap: Record<string, string> = {
+    ectomorph: 'ectomorfo',
+    mesomorph: 'mesomorfo',
+    endomorph: 'endomorfo',
+  };
+  return {
+    weight: data.biometrics.weight,
+    height: data.biometrics.height,
+    age: data.biometrics.age,
+    gender: data.biometrics.gender === 'female' ? 'feminino' : 'masculino',
+    biotype: bioMap[data.biometrics.biotype ?? 'mesomorph'] ?? 'mesomorfo',
+    objective: objMap[data.goals.primary] ?? 'hipertrofia',
+    workout_time: data.preferences.workoutTime,
+    workout_duration: data.preferences.workoutDuration,
+    wake_up_time: data.preferences.wakeTime,
+    sleep_time: data.preferences.sleepTime,
+    meals_per_day: data.preferences.mealsPerDay,
+    allergies: data.restrictions?.allergies ?? [],
+  };
+}
 
 export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  // Calcular TDEE (Total Daily Energy Expenditure)
-  const calculateTDEE = (data: OnboardingData): number => {
-    const { weight, height, age, gender } = data.biometrics;
-    
-    // Fórmula de Mifflin-St Jeor (mais precisa)
-    let bmr: number;
-    if (gender === 'male') {
-      bmr = 10 * weight + 6.25 * height - 5 * age + 5;
-    } else {
-      bmr = 10 * weight + 6.25 * height - 5 * age - 161;
-    }
-
-    // Fator de atividade mais conservador
-    // Padrão: 1.2 (Sedentário) ou no máximo 1.375 (Levemente ativo)
-    // Só usar valores maiores se o usuário treinar muito (5+ dias)
-    let activityFactor: number;
-    if (data.preferences.workoutDaysPerWeek >= 5) {
-      activityFactor = 1.375; // Levemente ativo (máximo conservador)
-    } else if (data.preferences.workoutDaysPerWeek >= 3) {
-      activityFactor = 1.2; // Sedentário (padrão conservador)
-    } else {
-      activityFactor = 1.2; // Sedentário (padrão)
-    }
-
-    let tdee = bmr * activityFactor;
-
-    // Ajustar baseado no objetivo
-    if (data.goals.primary === 'weight_loss') {
-      // Déficit de 500 a 750 kcal (usando 750 para ser mais efetivo)
-      tdee -= 750;
-    } else if (data.goals.primary === 'hypertrophy') {
-      tdee += 300; // Superávit de 300kcal
-    }
-
-    // Travas de segurança: mínimo absoluto para evitar dietas de fome
-    const minCalories = gender === 'male' ? 1800 : 1400;
-    if (tdee < minCalories) {
-      tdee = minCalories;
-    }
-
-    return Math.round(tdee);
-  };
-
-  // Funções auxiliares para manipulação de horários
-  const timeToMinutes = (time: string): number => {
-    const [hours, minutes] = time.split(':').map(Number);
-    return hours * 60 + minutes;
-  };
-
-  const minutesToTime = (minutes: number): string => {
-    const hours = Math.floor(minutes / 60) % 24;
-    const mins = minutes % 60;
-    return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
-  };
-
-  const addMinutes = (time: string, minutes: number): string => {
-    return minutesToTime(timeToMinutes(time) + minutes);
-  };
-
-  // Identificar alimentos adequados para pré-treino (carboidratos leves/energéticos)
-  const isPreWorkoutFood = (food: Food): boolean => {
-    // Carboidratos leves, frutas, snacks energéticos
-    return (food.category === 'carb' && (food.name.includes('Batata-doce') || food.name.includes('Aveia') || food.name.includes('Tapioca'))) ||
-           (food.category === 'fruit' && food.name === 'Banana') ||
-           (food.category === 'carb' && (food.name.includes('Pão') || food.name.includes('Cuscuz')));
-  };
-
-  // Identificar alimentos adequados para pós-treino (ricos em proteína)
-  const isPostWorkoutFood = (food: Food): boolean => {
-    // Proteínas e carboidratos de recuperação
-    return food.category === 'protein' ||
-           (food.category === 'carb' && food.name.includes('Batata-doce')) ||
-           (food.allowedMeals.includes('pos_treino'));
-  };
-
-  // Identificar alimentos leves para ceia (slow release)
-  const isBedtimeFood = (food: Food): boolean => {
-    // Alimentos leves, laticínios, frutas com gordura
-    return food.category === 'dairy' ||
-           (food.category === 'fruit' && (food.name === 'Abacate')) ||
-           (food.allowedMeals.includes('ceia'));
-  };
-
-  // Função auxiliar para mapear alergias do usuário para tags de alimentos
-  const mapAllergyToTags = (allergy: string): string[] => {
-    const allergyLower = allergy.toLowerCase();
-    const tags: string[] = [];
-    
-    if (allergyLower.includes('lactose') || allergyLower.includes('leite')) {
-      tags.push('lactose', 'derivado de leite', 'leite');
-    }
-    if (allergyLower.includes('glúten') || allergyLower.includes('gluten') || allergyLower.includes('trigo')) {
-      tags.push('gluten', 'trigo');
-    }
-    if (allergyLower.includes('ovo') || allergyLower.includes('ovos')) {
-      tags.push('ovo');
-    }
-    if (allergyLower.includes('amendoim')) {
-      tags.push('amendoim');
-    }
-    if (allergyLower.includes('peixe') || allergyLower.includes('frutos do mar') || allergyLower.includes('frutos do mar') || allergyLower.includes('crustáceos') || allergyLower.includes('camarão')) {
-      tags.push('peixe', 'frutos do mar', 'crustáceos');
-    }
-    
-    return tags;
-  };
-
-  // Função para filtrar alimentos permitidos baseado em alergias
-  const filterAllowedFoods = (foods: Food[], allergies: string[]): Food[] => {
-    if (allergies.length === 0) return foods;
-    
-    // Mapear todas as alergias para tags
-    const forbiddenTags = new Set<string>();
-    allergies.forEach(allergy => {
-      const tags = mapAllergyToTags(allergy);
-      tags.forEach(tag => forbiddenTags.add(tag.toLowerCase()));
-    });
-    
-    // Filtrar alimentos que não contêm nenhuma tag proibida
-    return foods.filter(food => {
-      if (!food.tags || food.tags.length === 0) return true; // Alimentos sem tags são permitidos
-      
-      // Verificar se alguma tag do alimento está na lista de proibidos
-      const hasForbiddenTag = food.tags.some(tag => 
-        forbiddenTags.has(tag.toLowerCase())
-      );
-      
-      return !hasForbiddenTag;
-    });
-  };
-
-  // Função para encontrar substituto equivalente nutricional
-  const findEquivalentSubstitute = (
-    originalFood: Food,
-    allowedFoods: Food[],
-    targetCategory?: 'protein' | 'carb' | 'fat' | 'vegetable' | 'fruit' | 'dairy'
-  ): Food | null => {
-    // Filtrar por categoria se especificada
-    let candidates = targetCategory 
-      ? allowedFoods.filter(f => f.category === targetCategory)
-      : allowedFoods.filter(f => f.category === originalFood.category);
-    
-    if (candidates.length === 0) {
-      // Se não houver na mesma categoria, buscar em categorias relacionadas
-      if (originalFood.category === 'protein') {
-        candidates = allowedFoods.filter(f => f.category === 'protein');
-      } else if (originalFood.category === 'carb') {
-        candidates = allowedFoods.filter(f => f.category === 'carb' || f.category === 'fruit');
-      }
-    }
-    
-    if (candidates.length === 0) return null;
-    
-    // Calcular diferença nutricional e encontrar o melhor substituto
-    const substitutes = candidates.map(food => {
-      const proteinDiff = Math.abs(food.protein - originalFood.protein);
-      const calorieDiff = Math.abs(food.calories - originalFood.calories);
-      const caloriePercentDiff = originalFood.calories > 0 
-        ? (calorieDiff / originalFood.calories) * 100 
-        : 0;
-      
-      return {
-        food,
-        proteinDiff,
-        caloriePercentDiff,
-        score: proteinDiff + (caloriePercentDiff * 0.1) // Penalizar mais diferença de calorias
-      };
-    });
-    
-    // Filtrar por critérios de equivalência: proteína +/- 5g, calorias +/- 15%
-    const validSubstitutes = substitutes.filter(sub => 
-      sub.proteinDiff <= 5 && sub.caloriePercentDiff <= 15
-    );
-    
-    if (validSubstitutes.length === 0) {
-      // Se não houver substituto perfeito, retornar o mais próximo
-      substitutes.sort((a, b) => a.score - b.score);
-      return substitutes[0]?.food || null;
-    }
-    
-    // Retornar o melhor substituto válido
-    validSubstitutes.sort((a, b) => a.score - b.score);
-    return validSubstitutes[0].food;
-  };
-
-  // Gerar refeições para um dia específico usando Crononutrição Dinâmica
-  const generateDayMeals = (
-    dailyCalories: number,
-    mealsPerDay: number,
-    week: number,
-    dayIndex: number,
-    preferences: Preferences,
-    allergies: string[] = []
-  ): Meal[] => {
-    const meals: Meal[] = [];
-
-    // ============================================
-    // FILTRO DE EXCLUSÃO (HARD FILTER) - BASEADO EM ALERGIAS
-    // ============================================
-    const allowedFoods = filterAllowedFoods(mockFoods, allergies);
-
-    // VALIDAÇÃO: Usar valores reais do perfil (obrigatórios)
-    if (!preferences.wakeTime || !preferences.workoutTime || !preferences.sleepTime) {
-      // Se não houver valores, usar valores padrão apenas como fallback
-      // Mas o ideal é que sempre venham do perfil
-      console.warn('Horários não definidos no perfil. Usando valores padrão.');
-    }
-    
-    const wakeTime = preferences.wakeTime || '08:00';
-    const workoutTime = preferences.workoutTime || '17:00';
-    const sleepTime = preferences.sleepTime || '23:00';
-    const workoutDuration = preferences.workoutDuration || 90;
-
-    // ============================================
-    // 1. DEFINIR EVENTOS FIXOS (Timeline) - BASEADO NOS DADOS REAIS
-    // ============================================
-    // Desjejum: EXATAMENTE 30 minutos após acordar
-    const breakfastTime = addMinutes(wakeTime, 30);
-    
-    // Pré-Treino: EXATAMENTE 30 minutos ANTES do início do treino
-    const preWorkoutTime = addMinutes(workoutTime, -30);
-    
-    // Pós-Treino: EXATAMENTE 30 minutos APÓS o fim do treino
-    const workoutEnd = addMinutes(workoutTime, workoutDuration);
-    const postWorkoutTime = addMinutes(workoutEnd, 30);
-    
-    // Ceia: EXATAMENTE 30 minutos ANTES de dormir
-    const lastMealTime = addMinutes(sleepTime, -30);
-
-    // Converter para minutos para facilitar cálculos
-    const breakfastMinutes = timeToMinutes(breakfastTime);
-    const preWorkoutMinutes = timeToMinutes(preWorkoutTime);
-    const postWorkoutMinutes = timeToMinutes(postWorkoutTime);
-    const lastMealMinutes = timeToMinutes(lastMealTime);
-
-    // REGRA: Intervalo mínimo de 2 horas (120 minutos) entre qualquer refeição
-    const MIN_INTERVAL_MINUTES = 120;
-    
-    // Função auxiliar para determinar nome da refeição baseado no horário
-    // (Definida aqui para ser acessível em todo o escopo)
-    const getMealName = (timeMinutes: number): { name: string; mealTime: MealTime } => {
-      const timeStr = minutesToTime(timeMinutes);
-      const [hours, minutes] = timeStr.split(':').map(Number);
-      const timeInMinutes = hours * 60 + minutes;
-      
-      // Almoço: entre 11:30 e 13:30
-      const lunchStart = 11 * 60 + 30; // 11:30
-      const lunchEnd = 13 * 60 + 30;    // 13:30
-      
-      if (timeInMinutes >= lunchStart && timeInMinutes <= lunchEnd) {
-        return { name: 'Almoço', mealTime: 'almoco' };
-      }
-      
-      // Janta: após Pós-Treino e antes da Ceia
-      if (timeMinutes > postWorkoutMinutes && timeMinutes < lastMealMinutes) {
-        return { name: 'Janta', mealTime: 'janta' };
-      }
-      
-      // Lanche da Tarde: padrão para refeições intermediárias
-      return { name: 'Lanche da Tarde', mealTime: 'lanche_tarde' };
-    };
-
-    // ============================================
-    // 2. DISTRIBUIÇÃO INTELIGENTE COM INTERVALO MÍNIMO DE 2 HORAS
-    // ============================================
-    // Calcular quantas refeições intermediárias precisamos
-    // Total: mealsPerDay principais + 2 extras (Pré + Pós)
-    // Fixas: Desjejum, Pré-Treino, Pós-Treino, Ceia = 4
-    // Intermediárias necessárias: mealsPerDay - 2 (Desjejum e Ceia já contam)
-    const intermediateMealsNeeded = Math.max(0, mealsPerDay - 2);
-    
-    // Distribuir refeições entre Desjejum e Pré-Treino
-    const intermediateMealTimes: Array<{ time: number; name: string; mealTime: MealTime }> = [];
-    
-    if (intermediateMealsNeeded > 0) {
-      const timeBetweenBreakfastAndPreWorkout = preWorkoutMinutes - breakfastMinutes;
-      
-      // Calcular intervalo ideal respeitando o mínimo de 2 horas
-      const idealInterval = timeBetweenBreakfastAndPreWorkout / (intermediateMealsNeeded + 1);
-      
-      // Se o intervalo ideal for menor que o mínimo, ajustar
-      if (idealInterval < MIN_INTERVAL_MINUTES) {
-        // Tentar distribuir com intervalo mínimo
-        const maxPossibleMeals = Math.floor(timeBetweenBreakfastAndPreWorkout / MIN_INTERVAL_MINUTES);
-        
-        if (maxPossibleMeals >= intermediateMealsNeeded) {
-          // Distribuir com intervalo mínimo de 2 horas
-          for (let i = 1; i <= intermediateMealsNeeded; i++) {
-            const mealTime = breakfastMinutes + (MIN_INTERVAL_MINUTES * i);
-            if (mealTime < preWorkoutMinutes - MIN_INTERVAL_MINUTES) {
-              const mealInfo = getMealName(mealTime);
-              intermediateMealTimes.push({
-                time: mealTime,
-                name: mealInfo.name,
-                mealTime: mealInfo.mealTime,
-              });
-            }
-          }
-        } else {
-          // Não há espaço suficiente, distribuir o máximo possível respeitando o mínimo
-          for (let i = 1; i <= maxPossibleMeals; i++) {
-            const mealTime = breakfastMinutes + (MIN_INTERVAL_MINUTES * i);
-            if (mealTime < preWorkoutMinutes - MIN_INTERVAL_MINUTES) {
-              const mealInfo = getMealName(mealTime);
-              intermediateMealTimes.push({
-                time: mealTime,
-                name: mealInfo.name,
-                mealTime: mealInfo.mealTime,
-              });
-            }
-          }
-        }
-      } else {
-        // Intervalo ideal é suficiente, distribuir uniformemente
-        for (let i = 1; i <= intermediateMealsNeeded; i++) {
-          const mealTime = breakfastMinutes + idealInterval * i;
-          const mealInfo = getMealName(mealTime);
-          intermediateMealTimes.push({
-            time: mealTime,
-            name: mealInfo.name,
-            mealTime: mealInfo.mealTime,
-          });
-        }
-      }
-    }
-    
-    // Verificar se há espaço para refeição entre Pós-Treino e Ceia
-    const timeBetweenPostWorkoutAndDinner = lastMealMinutes - postWorkoutMinutes;
-    if (timeBetweenPostWorkoutAndDinner >= MIN_INTERVAL_MINUTES * 2) {
-      // Há espaço para uma refeição (Janta) entre Pós-Treino e Ceia
-      const dinnerTime = postWorkoutMinutes + MIN_INTERVAL_MINUTES;
-      if (dinnerTime < lastMealMinutes - MIN_INTERVAL_MINUTES) {
-        intermediateMealTimes.push({
-          time: dinnerTime,
-          name: 'Janta',
-          mealTime: 'janta',
-        });
-      }
-    }
-    
-    // Ordenar todos os horários intermediários
-    intermediateMealTimes.sort((a, b) => a.time - b.time);
-
-    // ============================================
-    // 3. DISTRIBUIÇÃO CALÓRICA (GARANTINDO SOMA EXATA)
-    // ============================================
-    // Pré-Treino: 10% do total (arredondado)
-    const preWorkoutCalories = Math.round(dailyCalories * 0.10);
-    
-    // Pós-Treino: 15% do total (arredondado)
-    const postWorkoutCalories = Math.round(dailyCalories * 0.15);
-    
-    // Calorias restantes para as refeições principais
-    const remainingCalories = dailyCalories - preWorkoutCalories - postWorkoutCalories;
-    
-    // Dividir igualmente entre as refeições principais (sem arredondar ainda)
-    const caloriesPerMainMealFloat = remainingCalories / mealsPerDay;
-    
-    // Arredondar todas exceto a última para evitar diferenças
-    const caloriesPerMainMeal = Math.floor(caloriesPerMainMealFloat);
-    
-    // Ajuste final para garantir que a soma seja EXATAMENTE dailyCalories
-    const totalAllocated = (caloriesPerMainMeal * mealsPerDay) + preWorkoutCalories + postWorkoutCalories;
-    const difference = dailyCalories - totalAllocated;
-    
-    // Ajustar a primeira refeição principal (Desjejum) com a diferença para garantir soma exata
-    const adjustedBreakfastCalories = caloriesPerMainMeal + difference;
-
-    // ============================================
-    // 4. CRIAR REFEIÇÕES NA ORDEM CRONOLÓGICA CORRETA
-    // ============================================
-    interface MealEvent {
-      time: number;
-      name: string;
-      type: 'main' | 'pre_workout' | 'post_workout';
-      calories: number;
-      mealTime: MealTime;
-    }
-
-    const mealEvents: MealEvent[] = [];
-
-    // 1. Desjejum (Marco Inamovível) - wakeTime + 30min
-    mealEvents.push({
-      time: breakfastMinutes,
-      name: 'Desjejum',
-      type: 'main',
-      calories: adjustedBreakfastCalories,
-      mealTime: 'desjejum',
-    });
-
-    // 2. Refeições intermediárias (com nomes e horários já calculados)
-    // Filtrar apenas as que estão entre Desjejum e Pré-Treino
-    const mealsBeforePreWorkout = intermediateMealTimes.filter(m => m.time < preWorkoutMinutes);
-    mealsBeforePreWorkout.forEach((meal) => {
-      mealEvents.push({
-        time: meal.time,
-        name: meal.name,
-        type: 'main',
-        calories: caloriesPerMainMeal,
-        mealTime: meal.mealTime,
-      });
-    });
-
-    // 3. Pré-Treino (Marco Inamovível) - workoutTime - 30min
-    mealEvents.push({
-      time: preWorkoutMinutes,
-      name: 'Pré-Treino',
-      type: 'pre_workout',
-      calories: preWorkoutCalories,
-      mealTime: 'lanche_tarde',
-    });
-
-    // 4. Pós-Treino (Marco Inamovível) - workoutEnd + 30min
-    mealEvents.push({
-      time: postWorkoutMinutes,
-      name: 'Pós-Treino',
-      type: 'post_workout',
-      calories: postWorkoutCalories,
-      mealTime: 'pos_treino',
-    });
-
-    // 5. Refeições intermediárias após Pós-Treino (Janta)
-    const mealsAfterPostWorkout = intermediateMealTimes.filter(m => m.time > postWorkoutMinutes);
-    mealsAfterPostWorkout.forEach((meal) => {
-      mealEvents.push({
-        time: meal.time,
-        name: meal.name,
-        type: 'main',
-        calories: caloriesPerMainMeal,
-        mealTime: meal.mealTime,
-      });
-    });
-
-    // 6. Ceia (Marco Inamovível) - sleepTime - 30min
-    mealEvents.push({
-      time: lastMealMinutes,
-      name: 'Ceia',
-      type: 'main',
-      calories: caloriesPerMainMeal,
-      mealTime: 'ceia',
-    });
-
-    // Ordenar eventos cronologicamente (garantir ordem correta)
-    mealEvents.sort((a, b) => a.time - b.time);
-    
-    // Validação final: verificar se há refeições muito próximas (menos de 2 horas)
-    for (let i = 0; i < mealEvents.length - 1; i++) {
-      const currentTime = mealEvents[i].time;
-      const nextTime = mealEvents[i + 1].time;
-      const interval = nextTime - currentTime;
-      
-      if (interval < MIN_INTERVAL_MINUTES) {
-        // Ajustar a próxima refeição para respeitar o intervalo mínimo
-        mealEvents[i + 1].time = currentTime + MIN_INTERVAL_MINUTES;
-        
-        // Recalcular nome se necessário após ajuste
-        if (mealEvents[i + 1].type === 'main') {
-          const mealInfo = getMealName(mealEvents[i + 1].time);
-          mealEvents[i + 1].name = mealInfo.name;
-          mealEvents[i + 1].mealTime = mealInfo.mealTime;
-        }
-      }
-    }
-
-    // ============================================
-    // 6. GERAR ALIMENTOS PARA CADA REFEIÇÃO
-    // ============================================
-    const seed = week * 7 + dayIndex;
-
-    mealEvents.forEach((event, mealIndex) => {
-      const caloriesForMeal = event.calories;
-      
-      // Distribuir macros baseado no tipo de refeição
-      let targetProtein: number, targetCarbs: number, targetFat: number;
-      
-      if (event.type === 'pre_workout') {
-        // Pré-treino: foco em carboidratos (60% carbs, 20% protein, 20% fat)
-        targetCarbs = Math.round((caloriesForMeal * 0.6) / 4);
-        targetProtein = Math.round((caloriesForMeal * 0.2) / 4);
-        targetFat = Math.round((caloriesForMeal * 0.2) / 9);
-      } else if (event.type === 'post_workout') {
-        // Pós-treino: foco em proteína (40% protein, 40% carbs, 20% fat)
-        targetProtein = Math.round((caloriesForMeal * 0.4) / 4);
-        targetCarbs = Math.round((caloriesForMeal * 0.4) / 4);
-        targetFat = Math.round((caloriesForMeal * 0.2) / 9);
-      } else if (event.type === 'main' && event.mealTime === 'ceia') {
-        // Ceia: mais leve, menos carboidratos
-        targetProtein = Math.round((caloriesForMeal * 0.35) / 4);
-        targetCarbs = Math.round((caloriesForMeal * 0.25) / 4);
-        targetFat = Math.round((caloriesForMeal * 0.4) / 9);
-      } else {
-        // Refeições principais: balanceado (30% protein, 40% carbs, 30% fat)
-        targetProtein = Math.round((caloriesForMeal * 0.3) / 4);
-        targetCarbs = Math.round((caloriesForMeal * 0.4) / 4);
-        targetFat = Math.round((caloriesForMeal * 0.3) / 9);
-      }
-
-      const mealFoods: Meal['foods'] = [];
-      let currentCalories = 0;
-      let currentProtein = 0;
-      let currentCarbs = 0;
-      let currentFat = 0;
-
-      // Selecionar alimentos baseado no tipo de refeição (USANDO allowedFoods)
-      let availableProteins: Food[];
-      let availableCarbs: Food[];
-      let availableVegetables: Food[];
-      let availableFats: Food[];
-
-      if (event.type === 'pre_workout') {
-        // Pré-treino: alimentos energéticos
-        availableCarbs = allowedFoods.filter(f => 
-          (f.category === 'carb' || f.category === 'fruit') && 
-          (isPreWorkoutFood(f) || f.allowedMeals.includes(event.mealTime))
-        );
-        availableProteins = allowedFoods.filter(f => 
-          f.category === 'protein' && 
-          f.allowedMeals.includes(event.mealTime) &&
-          (f.name.includes('Ovo') || f.name.includes('Presunto'))
-        );
-        availableVegetables = [];
-        availableFats = [];
-      } else if (event.type === 'post_workout') {
-        // Pós-treino: alimentos ricos em proteína
-        availableProteins = allowedFoods.filter(f => 
-          f.category === 'protein' && 
-          (isPostWorkoutFood(f) || f.allowedMeals.includes(event.mealTime))
-        );
-        availableCarbs = allowedFoods.filter(f => 
-          (f.category === 'carb' || f.category === 'fruit') && 
-          (isPostWorkoutFood(f) || f.allowedMeals.includes(event.mealTime))
-        );
-        availableVegetables = allowedFoods.filter(f => 
-          f.category === 'vegetable' && 
-          f.allowedMeals.includes(event.mealTime)
-        );
-        availableFats = allowedFoods.filter(f => 
-          f.category === 'fat' && 
-          f.allowedMeals.includes(event.mealTime)
-        );
-      } else if (event.type === 'main' && event.mealTime === 'ceia') {
-        // Ceia: alimentos leves
-        availableProteins = allowedFoods.filter(f => 
-          f.category === 'protein' && 
-          (isBedtimeFood(f) || f.allowedMeals.includes(event.mealTime))
-        );
-        availableCarbs = allowedFoods.filter(f => 
-          (f.category === 'carb' || f.category === 'fruit') && 
-          (isBedtimeFood(f) || f.allowedMeals.includes(event.mealTime))
-        );
-        availableVegetables = [];
-        availableFats = allowedFoods.filter(f => 
-          f.category === 'fat' && 
-          f.allowedMeals.includes(event.mealTime)
-        );
-      } else {
-        // Refeições principais normais
-        availableProteins = allowedFoods.filter(f => 
-          f.category === 'protein' && 
-          f.allowedMeals.includes(event.mealTime)
-        );
-        availableCarbs = allowedFoods.filter(f => 
-          f.category === 'carb' && 
-          f.allowedMeals.includes(event.mealTime)
-        );
-        availableVegetables = allowedFoods.filter(f => 
-          f.category === 'vegetable' && 
-          f.allowedMeals.includes(event.mealTime)
-        );
-        availableFats = allowedFoods.filter(f => 
-          f.category === 'fat' && 
-          f.allowedMeals.includes(event.mealTime)
-        );
-      }
-
-      // ============================================
-      // LÓGICA DE SUBSTITUIÇÃO POR EQUIVALÊNCIA
-      // ============================================
-      // Se um alimento selecionado não estiver disponível (foi bloqueado),
-      // buscar substituto equivalente
-      const ensureFoodAvailable = (food: Food | undefined, category: 'protein' | 'carb' | 'fat' | 'vegetable' | 'fruit' | 'dairy'): Food | null => {
-        if (!food) return null;
-        
-        // Verificar se o alimento está na lista de permitidos
-        const isAllowed = allowedFoods.some(f => f.id === food.id);
-        
-        if (isAllowed) {
-          return food;
-        }
-        
-        // Se não estiver permitido, buscar substituto equivalente
-        return findEquivalentSubstitute(food, allowedFoods, category);
-      };
-
-      // Adicionar proteína
-      if (availableProteins.length > 0 && targetProtein > 0) {
-        const proteinIndex = (seed * 3 + mealIndex) % availableProteins.length;
-        let protein = availableProteins[proteinIndex];
-        
-        // Garantir que o alimento está disponível (aplicar substituição se necessário)
-        const finalProtein = ensureFoodAvailable(protein, 'protein');
-        if (finalProtein) {
-          protein = finalProtein;
-          const qty = Math.max(1, Math.round(targetProtein / protein.protein));
-          mealFoods.push({
-            id: protein.id,
-            name: protein.name,
-            quantity: qty,
-            calories: protein.calories * qty,
-            protein: protein.protein * qty,
-            carbs: protein.carbs * qty,
-            fat: protein.fat * qty,
-          });
-          currentCalories += protein.calories * qty;
-          currentProtein += protein.protein * qty;
-          currentCarbs += protein.carbs * qty;
-          currentFat += protein.fat * qty;
-        }
-      }
-
-      // Adicionar carboidrato
-      if (availableCarbs.length > 0 && targetCarbs > 0) {
-        const carbIndex = (seed * 5 + mealIndex * 2) % availableCarbs.length;
-        let carb = availableCarbs[carbIndex];
-        
-        // Garantir que o alimento está disponível (aplicar substituição se necessário)
-        const finalCarb = ensureFoodAvailable(carb, 'carb');
-        if (finalCarb) {
-          carb = finalCarb;
-          const qty = Math.max(1, Math.round(targetCarbs / carb.carbs));
-          mealFoods.push({
-            id: carb.id,
-            name: carb.name,
-            quantity: qty,
-            calories: carb.calories * qty,
-            protein: carb.protein * qty,
-            carbs: carb.carbs * qty,
-            fat: carb.fat * qty,
-          });
-          currentCalories += carb.calories * qty;
-          currentProtein += carb.protein * qty;
-          currentCarbs += carb.carbs * qty;
-          currentFat += carb.fat * qty;
-        }
-      }
-
-      // Adicionar vegetal (exceto pré-treino e ceia)
-      if (availableVegetables.length > 0 && event.type !== 'pre_workout' && event.mealTime !== 'ceia') {
-        const vegIndex = (seed * 7 + mealIndex * 3) % availableVegetables.length;
-        let veg = availableVegetables[vegIndex];
-        
-        // Garantir que o alimento está disponível (aplicar substituição se necessário)
-        const finalVeg = ensureFoodAvailable(veg, 'vegetable');
-        if (finalVeg) {
-          veg = finalVeg;
-          mealFoods.push({
-            id: veg.id,
-            name: veg.name,
-            quantity: 1,
-            calories: veg.calories,
-            protein: veg.protein,
-            carbs: veg.carbs,
-            fat: veg.fat,
-          });
-          currentCalories += veg.calories;
-          currentProtein += veg.protein;
-          currentCarbs += veg.carbs;
-          currentFat += veg.fat;
-        }
-      }
-
-      // Adicionar gordura se necessário
-      if (availableFats.length > 0 && currentFat < targetFat * 0.8 && targetFat > 0) {
-        const fatIndex = (seed * 11 + mealIndex) % availableFats.length;
-        let fat = availableFats[fatIndex];
-        
-        // Garantir que o alimento está disponível (aplicar substituição se necessário)
-        const finalFat = ensureFoodAvailable(fat, 'fat');
-        if (finalFat) {
-          fat = finalFat;
-          mealFoods.push({
-            id: fat.id,
-            name: fat.name,
-            quantity: 1,
-            calories: fat.calories,
-            protein: fat.protein,
-            carbs: fat.carbs,
-            fat: fat.fat,
-          });
-          currentCalories += fat.calories;
-          currentProtein += fat.protein;
-          currentCarbs += fat.carbs;
-          currentFat += fat.fat;
-        }
-      }
-
-      meals.push({
-        id: `meal-${week}-${dayIndex}-${mealIndex}`,
-        name: event.name,
-        time: minutesToTime(event.time),
-        foods: mealFoods,
-        totalCalories: Math.round(currentCalories),
-        totalProtein: Math.round(currentProtein),
-        totalCarbs: Math.round(currentCarbs),
-        totalFat: Math.round(currentFat),
-      });
-    });
-
-    // Ordenação por hora (HH:mm) e nomenclatura inteligente (faixa + Pré/Pós-Treino)
-    return processMealsForDay(
-      meals,
-      preferences.workoutTime,
-      preferences.workoutDuration
-    );
-  };
-
-  // Gerar refeições para todos os dias da semana
-  const generateWeeklyMeals = (dailyCalories: number, mealsPerDay: number, week: number, preferences: Preferences, allergies: string[] = []): DailyMeals => {
-    const days: DayOfWeek[] = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-    const dailyMeals: DailyMeals = {
-      monday: [],
-      tuesday: [],
-      wednesday: [],
-      thursday: [],
-      friday: [],
-      saturday: [],
-      sunday: [],
-    };
-
-    days.forEach((day, dayIndex) => {
-      dailyMeals[day] = generateDayMeals(dailyCalories, mealsPerDay, week, dayIndex, preferences, allergies);
-    });
-
-    return dailyMeals;
-  };
-
   // Gerar treinos inteligentes baseado em objetivo, frequência e tempo
-  // AI Personal Trainer usando: Goal, Frequency, Duration, Location, Injuries
   const generateWorkouts = (data: OnboardingData, week: number): WorkoutDay[] => {
+    
     const workouts: WorkoutDay[] = [];
     const daysPerWeek = data.preferences.workoutDaysPerWeek;
     const timePerWorkout = data.preferences.workoutDuration; // em minutos
@@ -1428,49 +721,31 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return workouts;
   };
 
-  /** Gera plano do zero. Ao mudar Objetivo/Dias/Duração, o treino é sempre RECALCULADO (reset completo). */
-  const generatePlan = (data: OnboardingData): FourWeekPlan => {
-    const tdee = calculateTDEE(data);
-    const startDate = new Date().toISOString();
-    const weeks: WeeklyPlan[] = [];
+  /** Gera plano completo (dieta via IA Groq + treino local). Assíncrono. */
+  const generatePlanAsync = async (data: OnboardingData, accessToken?: string | null): Promise<FourWeekPlan> => {
+    const profile = onboardingToDietProfile(data);
+    const result = await fetchDietFromApi(profile, accessToken);
+
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+
+    const plan = result.plan;
+    const workoutPlan: WorkoutDay[] = [];
 
     for (let week = 1; week <= 4; week++) {
-      const dailyMeals = generateWeeklyMeals(tdee, data.preferences.mealsPerDay, week, data.preferences, data.restrictions.allergies || []);
-      const workouts = generateWorkouts(data, week);
-
-      // Calculate totals from Monday's meals (all days have same structure)
-      const mondayMeals = dailyMeals.monday;
-      const totalCalories = mondayMeals.reduce((sum, m) => sum + m.totalCalories, 0);
-      const totalProtein = mondayMeals.reduce((sum, m) => sum + m.totalProtein, 0);
-      const totalCarbs = mondayMeals.reduce((sum, m) => sum + m.totalCarbs, 0);
-      const totalFat = mondayMeals.reduce((sum, m) => sum + m.totalFat, 0);
-
-      // Flatten all meals for backward compatibility
-      const allMeals: Meal[] = [
-        ...dailyMeals.monday,
-        ...dailyMeals.tuesday,
-        ...dailyMeals.wednesday,
-        ...dailyMeals.thursday,
-        ...dailyMeals.friday,
-        ...dailyMeals.saturday,
-        ...dailyMeals.sunday,
-      ];
-
-      weeks.push({
-        week,
-        meals: allMeals, // Keep for backward compatibility
-        dailyMeals, // New structure
-        workouts,
-        totalCalories: Math.round(totalCalories), // Daily average
-        totalProtein: Math.round(totalProtein),
-        totalCarbs: Math.round(totalCarbs),
-        totalFat: Math.round(totalFat),
-      });
+      workoutPlan.push(...generateWorkouts(data, week));
     }
+
+    const weeks: WeeklyPlan[] = plan.weeks.map((w, i) => ({
+      ...w,
+      workouts: workoutPlan.filter(wk => wk.week === i + 1),
+    }));
 
     return {
       weeks,
-      startDate,
+      startDate: plan.startDate,
+      dietaApi: plan.dietaApi,
     };
   };
 
@@ -1687,87 +962,10 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
   };
 
-  // Gerar apenas o plano de dieta (refeições)
-  const generateDietPlan = (profile: OnboardingData): { dailyMeals: DailyMeals[]; totals: { calories: number; protein: number; carbs: number; fat: number } } => {
-    const tdee = calculateTDEE(profile);
-    const dailyMeals: DailyMeals[] = [];
-
-    for (let week = 1; week <= 4; week++) {
-      const weeklyMeals = generateWeeklyMeals(tdee, profile.preferences.mealsPerDay, week, profile.preferences, profile.restrictions.allergies || []);
-      dailyMeals.push(weeklyMeals);
-    }
-
-    // Calcular totais usando segunda-feira da primeira semana como referência
-    const mondayMeals = dailyMeals[0].monday;
-    const totals = {
-      calories: Math.round(mondayMeals.reduce((sum, m) => sum + m.totalCalories, 0)),
-      protein: Math.round(mondayMeals.reduce((sum, m) => sum + m.totalProtein, 0)),
-      carbs: Math.round(mondayMeals.reduce((sum, m) => sum + m.totalCarbs, 0)),
-      fat: Math.round(mondayMeals.reduce((sum, m) => sum + m.totalFat, 0)),
-    };
-
-    return { dailyMeals, totals };
-  };
-
-  // Gerar apenas o plano de treino
-  const generateWorkoutPlan = (profile: OnboardingData): WorkoutDay[] => {
-    const workouts: WorkoutDay[] = [];
-
-    for (let week = 1; week <= 4; week++) {
-      const weeklyWorkouts = generateWorkouts(profile, week);
-      workouts.push(...weeklyWorkouts);
-    }
-
-    return workouts;
-  };
-
-  /** Regenera dieta e treino do zero (Reset Deep Copy). Usar ao mudar Objetivo no perfil. */
-  const regenerateAllPlans = (profile: OnboardingData): FourWeekPlan => {
-    const dietPlan = generateDietPlan(profile);
-    const workoutPlan = generateWorkoutPlan(profile);
-    const startDate = new Date().toISOString();
-    const weeks: WeeklyPlan[] = [];
-
-    for (let week = 1; week <= 4; week++) {
-      const dailyMeals = dietPlan.dailyMeals[week - 1];
-      const weekWorkouts = workoutPlan.filter(w => w.week === week);
-
-      // Flatten all meals for backward compatibility
-      const allMeals: Meal[] = [
-        ...dailyMeals.monday,
-        ...dailyMeals.tuesday,
-        ...dailyMeals.wednesday,
-        ...dailyMeals.thursday,
-        ...dailyMeals.friday,
-        ...dailyMeals.saturday,
-        ...dailyMeals.sunday,
-      ];
-
-      weeks.push({
-        week,
-        meals: allMeals,
-        dailyMeals,
-        workouts: weekWorkouts,
-        totalCalories: dietPlan.totals.calories,
-        totalProtein: dietPlan.totals.protein,
-        totalCarbs: dietPlan.totals.carbs,
-        totalFat: dietPlan.totals.fat,
-      });
-    }
-
-    return {
-      weeks,
-      startDate,
-    };
-  };
-
-  // Atribuir às referências exportadas
-  exportedGenerateDietPlan = generateDietPlan;
-  exportedGenerateWorkoutPlan = generateWorkoutPlan;
-  exportedRegenerateAllPlans = regenerateAllPlans;
+  exportedRegenerateAllPlansAsync = generatePlanAsync;
 
   return (
-    <PlanContext.Provider value={{ generatePlan, swapFoodItem, swapExercise }}>
+    <PlanContext.Provider value={{ generatePlanAsync, swapFoodItem, swapExercise }}>
       {children}
     </PlanContext.Provider>
   );
@@ -1781,32 +979,10 @@ export const usePlan = () => {
   return context;
 };
 
-// Funções exportadas para regenerar planos
-// Estas funções podem ser usadas de fora do contexto
-// Elas usam a mesma lógica das funções internas do PlanProvider
-
-// Gerar apenas o plano de dieta (refeições)
-// Usa dinamicamente profile.mealsPerDay e profile.goal (via TDEE)
-export const generateDietPlan = (profile: OnboardingData): { dailyMeals: DailyMeals[]; totals: { calories: number; protein: number; carbs: number; fat: number } } => {
-  if (!exportedGenerateDietPlan) {
-    throw new Error('PlanProvider não foi inicializado. Certifique-se de que o PlanProvider está montado antes de usar generateDietPlan.');
+// Regenerar todos os planos (dieta via IA + treino)
+export const regenerateAllPlansAsync = async (profile: OnboardingData, accessToken?: string | null): Promise<FourWeekPlan> => {
+  if (!exportedRegenerateAllPlansAsync) {
+    throw new Error('PlanProvider não foi inicializado.');
   }
-  return exportedGenerateDietPlan(profile);
-};
-
-// Gerar apenas o plano de treino
-// Usa dinamicamente profile.daysPerWeek (via profile.preferences.workoutDaysPerWeek)
-export const generateWorkoutPlan = (profile: OnboardingData): WorkoutDay[] => {
-  if (!exportedGenerateWorkoutPlan) {
-    throw new Error('PlanProvider não foi inicializado. Certifique-se de que o PlanProvider está montado antes de usar generateWorkoutPlan.');
-  }
-  return exportedGenerateWorkoutPlan(profile);
-};
-
-// Regenerar todos os planos (dieta + treino)
-export const regenerateAllPlans = (profile: OnboardingData): FourWeekPlan => {
-  if (!exportedRegenerateAllPlans) {
-    throw new Error('PlanProvider não foi inicializado. Certifique-se de que o PlanProvider está montado antes de usar regenerateAllPlans.');
-  }
-  return exportedRegenerateAllPlans(profile);
+  return exportedRegenerateAllPlansAsync(profile, accessToken);
 };

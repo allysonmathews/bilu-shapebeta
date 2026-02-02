@@ -54,7 +54,7 @@ const AppContent: React.FC = () => {
     setUser,
     refreshProfileFromSupabase,
   } = useUser();
-  const { generatePlan } = usePlan();
+  const { generatePlanAsync } = usePlan();
   const [currentTab, setCurrentTab] = useState('diario');
   const [restoreDone, setRestoreDone] = useState(false);
 
@@ -72,10 +72,14 @@ const AppContent: React.FC = () => {
   const handleRefresh = useCallback(async () => {
     if (!onboardingData) return;
     await new Promise((r) => setTimeout(r, 280));
-    const newPlan = generatePlan(onboardingData);
-    setPlan(newPlan);
-    // Não altera ProgressContext: pesos e histórico do dia atual permanecem.
-  }, [onboardingData, generatePlan, setPlan]);
+    try {
+      const { data: { session } } = await import('./lib/supabase').then((m) => m.supabase.auth.getSession());
+      const newPlan = await generatePlanAsync(onboardingData, session?.access_token ?? null);
+      setPlan(newPlan);
+    } catch (e) {
+      console.error('Erro ao regenerar plano:', e);
+    }
+  }, [onboardingData, generatePlanAsync, setPlan]);
 
   const usePullToRefresh = currentTab === 'treino' || currentTab === 'dieta';
 
@@ -91,7 +95,15 @@ const AppContent: React.FC = () => {
 
       const minimal = buildOnboardingDataFromProfile(profileCheckResult);
       setOnboardingData(minimal);
-      setPlan(generatePlan(minimal));
+      (async () => {
+        try {
+          const { data: { session } } = await import('./lib/supabase').then((m) => m.supabase.auth.getSession());
+          const plan = await generatePlanAsync(minimal, session?.access_token ?? null);
+          setPlan(plan);
+        } catch (e) {
+          console.error('Erro ao gerar plano:', e);
+        }
+      })();
       setUser({ ...user, onboardingCompleted: true, displayName: name });
       clearProfileCheckResult();
       setRestoreDone(true);
@@ -102,8 +114,14 @@ const AppContent: React.FC = () => {
 
     // Perfil pre-cadastro (biotype preenchido pela IA, mas sem name/objective)
     if (profileCheckResult?.biotype) {
-      refreshProfileFromSupabase((data) => {
-        setPlan(generatePlan(data));
+      refreshProfileFromSupabase(async (data) => {
+        try {
+          const { data: { session } } = await import('./lib/supabase').then((m) => m.supabase.auth.getSession());
+          const plan = await generatePlanAsync(data, session?.access_token ?? null);
+          setPlan(plan);
+        } catch (e) {
+          console.error('Erro ao gerar plano:', e);
+        }
         setRestoreDone(true);
       });
     }
@@ -113,7 +131,7 @@ const AppContent: React.FC = () => {
     onboardingData,
     setOnboardingData,
     setPlan,
-    generatePlan,
+    generatePlanAsync,
     setUser,
     user,
     clearProfileCheckResult,

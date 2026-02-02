@@ -14,7 +14,7 @@ const TOTAL_STEPS = 5;
 
 export const Onboarding: React.FC = () => {
   const { user, setOnboardingData, setPlan, setUser } = useUser();
-  const { generatePlan } = usePlan();
+  const { generatePlanAsync } = usePlan();
   const [useChatOnboarding, setUseChatOnboarding] = useState(false);
   const [step, setStep] = useState(1);
   const [userName, setUserName] = useState('');
@@ -71,7 +71,6 @@ export const Onboarding: React.FC = () => {
       goals,
       preferences,
     };
-    const plan = generatePlan(data);
 
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user?.id) {
@@ -80,6 +79,14 @@ export const Onboarding: React.FC = () => {
     }
 
     setSaving(true);
+    let plan;
+    try {
+      plan = await generatePlanAsync(data, session.access_token ?? null);
+    } catch (e) {
+      console.error('Erro ao gerar plano:', e);
+      setSaving(false);
+      return;
+    }
     const result = await saveProfileToSupabase(
       {
         name: displayName,
@@ -96,7 +103,7 @@ export const Onboarding: React.FC = () => {
       console.log('[Onboarding] Perfil salvo: sucesso');
       setOnboardingData(data);
       setUser({ ...user, onboardingCompleted: true, displayName });
-      setPlan(plan);
+      if (plan) setPlan(plan);
     } else {
       console.log('[Onboarding] Perfil salvo: erro', result.error);
     }

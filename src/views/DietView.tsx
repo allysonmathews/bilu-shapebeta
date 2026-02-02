@@ -223,7 +223,17 @@ export const DietView: React.FC = () => {
       }));
   };
 
-  const groceryList = generateGroceryList(selectedWeek);
+  // Usar lista_compras da API quando disponível (dieta gerada por IA)
+  const groceryList = plan.dietaApi?.lista_compras?.length
+    ? plan.dietaApi.lista_compras.map((item, i) => ({
+        id: `${item.item}-${i}`,
+        name: item.item,
+        totalQuantity: 1,
+        frequency: 1,
+        unit: item.quantidade,
+        baseName: item.item,
+      }))
+    : generateGroceryList(selectedWeek);
   
   // Separate items into "A comprar" and "Já comprado"
   const itemsToBuy = groceryList.filter(item => !checkedItems.has(item.id));
@@ -430,20 +440,18 @@ export const DietView: React.FC = () => {
 
                   <div className="space-y-2">
                     {meal.foods.map((food) => {
+                      const isApiDiet = food.id.startsWith('ai-');
                       const foodData = mockFoods.find(f => f.id === food.id);
-                      const cleanName = getCleanFoodName(food.id, food.name);
-                      const formattedQty = foodData 
-                        ? formatQuantity(food.quantity || 1, foodData.unit)
-                        : `${food.quantity || 1} uni`;
+                      const displayName = isApiDiet ? food.name : (getCleanFoodName(food.id, food.name) + (foodData ? ` (${formatQuantity(food.quantity || 1, foodData.unit)})` : ` (${food.quantity || 1} uni)`));
                       return (
                         <div
                           key={food.id}
                           className="flex items-center justify-between p-2 bg-deep-bg rounded border border-gray-800"
                         >
                           <p className="text-gray-300 text-sm flex-1">
-                            • {cleanName} ({formattedQty})
+                            • {displayName}
                           </p>
-                          <SwapButton onClick={() => handleSwapFood(meal.id, food.id)} />
+                          {!isApiDiet && <SwapButton onClick={() => handleSwapFood(meal.id, food.id)} />}
                         </div>
                       );
                     })}
@@ -501,11 +509,13 @@ export const DietView: React.FC = () => {
                             <p className="text-white font-medium mb-1">{item.name}</p>
                             <div className="flex gap-4 text-sm">
                               <span className="text-alien-green">
-                                Total: <strong>{formatQuantity(item.totalQuantity, item.unit)}</strong>
+                                Total: <strong>{plan.dietaApi?.lista_compras ? item.unit : formatQuantity(item.totalQuantity, item.unit)}</strong>
                               </span>
+                              {!plan.dietaApi?.lista_compras && (
                               <span className="text-bilu-purple">
                                 {item.frequency} {item.frequency === 1 ? 'refeição' : 'refeições'}
                               </span>
+                              )}
                             </div>
                           </div>
                           <button
@@ -537,11 +547,13 @@ export const DietView: React.FC = () => {
                             <p className="text-white font-medium mb-1 line-through">{item.name}</p>
                             <div className="flex gap-4 text-sm">
                               <span className="text-alien-green line-through opacity-70">
-                                Total: <strong>{formatQuantity(item.totalQuantity, item.unit)}</strong>
+                                Total: <strong>{plan.dietaApi?.lista_compras ? item.unit : formatQuantity(item.totalQuantity, item.unit)}</strong>
                               </span>
+                              {!plan.dietaApi?.lista_compras && (
                               <span className="text-bilu-purple line-through opacity-70">
                                 {item.frequency} {item.frequency === 1 ? 'refeição' : 'refeições'}
                               </span>
+                              )}
                             </div>
                           </div>
                           <button
