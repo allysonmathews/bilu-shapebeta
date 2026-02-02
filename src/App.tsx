@@ -58,6 +58,17 @@ const AppContent: React.FC = () => {
   const [currentTab, setCurrentTab] = useState('diario');
   const [restoreDone, setRestoreDone] = useState(false);
 
+  // Abrir aba 'evolucao' ao redirecionar do PreCadastroChat
+  useEffect(() => {
+    if (onboardingData && user.onboardingCompleted) {
+      const tab = sessionStorage.getItem('bilu_initial_tab');
+      if (tab) {
+        sessionStorage.removeItem('bilu_initial_tab');
+        setCurrentTab(tab);
+      }
+    }
+  }, [onboardingData, user.onboardingCompleted]);
+
   const handleRefresh = useCallback(async () => {
     if (!onboardingData) return;
     await new Promise((r) => setTimeout(r, 280));

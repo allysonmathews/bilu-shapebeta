@@ -20,6 +20,7 @@ export const OnboardingChat: React.FC = () => {
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -36,6 +37,7 @@ export const OnboardingChat: React.FC = () => {
     const text = inputValue.trim();
     if (!text || isLoading) return;
 
+    setError(null);
     const userMessage: ChatMessage = { role: 'user', content: text };
     setMessages((prev) => [...prev, userMessage]);
     setInputValue('');
@@ -87,6 +89,8 @@ export const OnboardingChat: React.FC = () => {
         }
       }
 
+      console.log('CONTEÚDO RECEBIDO DA IA:', fullContent);
+
       if (!fullContent) {
         setMessages((prev) => [
           ...prev,
@@ -96,6 +100,7 @@ export const OnboardingChat: React.FC = () => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ocorreu um erro. Tente novamente.';
       console.error('[OnboardingChat] Erro:', err);
+      setError(msg);
       setMessages((prev) => [
         ...prev,
         {
@@ -194,6 +199,13 @@ export const OnboardingChat: React.FC = () => {
           <div ref={messagesEndRef} />
         </div>
       </div>
+
+      {/* Erro (limpo ao enviar) */}
+      {error && (
+        <div className="flex-shrink-0 px-4 py-2 bg-red-900/20 border-t border-red-800/40">
+          <p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
 
       {/* Input */}
       <div className="flex-shrink-0 border-t border-gray-800/60 bg-card-bg/50 px-4 py-3 backdrop-blur-sm">

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { useUser } from '../context/UserContext';
+import { usePlan } from '../context/PlanContext';
 import { Send, Dumbbell } from 'lucide-react';
 
 export interface ChatMessage {
@@ -13,13 +15,34 @@ const INITIAL_AI_MESSAGE =
 const CHAT_API_URL =
   (import.meta.env.VITE_CHAT_API_URL as string | undefined) ?? '/api/chat/onboarding';
 
+/** Frases que indicam que o perfil foi salvo com sucesso (IA confirma conclusão). */
+const PROFILE_COMPLETE_PHRASES = [
+  'perfil salvo com sucesso',
+  'salvo com sucesso',
+  'salvei todas as suas informações',
+  'salvei todas as informações',
+  'tudo pronto',
+  'finalizamos',
+  'perfeito! salvei',
+  'pronto, salvei',
+  'posso montar seu plano',
+];
+
+function isProfileComplete(content: string): boolean {
+  const lower = content.toLowerCase();
+  return PROFILE_COMPLETE_PHRASES.some((p) => lower.includes(p));
+}
+
 export const PreCadastroChat: React.FC = () => {
+  const { refreshProfileFromSupabase, setPlan } = useUser();
+  const { generatePlan } = usePlan();
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: 'assistant', content: INITIAL_AI_MESSAGE },
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [profileSaved, setProfileSaved] = useState(false);
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -30,6 +53,20 @@ export const PreCadastroChat: React.FC = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  /** Redirecionamento automático: ao detectar perfil salvo, aguarda 2s e atualiza estado para exibir o app principal. */
+  useEffect(() => {
+    if (!profileSaved || isRedirecting) return;
+    const timer = setTimeout(() => {
+      setIsRedirecting(true);
+      sessionStorage.setItem('bilu_initial_tab', 'evolucao');
+      refreshProfileFromSupabase((data) => {
+        setPlan(generatePlan(data));
+      });
+      // Após refresh, o App re-renderiza e mostra o app principal
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [profileSaved, isRedirecting, refreshProfileFromSupabase, generatePlan, setPlan]);
 
   const handleSend = async () => {
     console.log('CHAMANDO API...');
@@ -93,7 +130,7 @@ export const PreCadastroChat: React.FC = () => {
           setMessages((prev) => [...prev, { role: 'assistant', content: 'Desculpe, não recebi resposta. Tente novamente.' }]);
         }
 
-        if (fullContent.includes('Perfil salvo com sucesso!') || fullContent.toLowerCase().includes('tudo pronto') || fullContent.toLowerCase().includes('finalizamos')) {
+        if (isProfileComplete(fullContent)) {
           setProfileSaved(true);
         }
       } else {
@@ -138,7 +175,7 @@ export const PreCadastroChat: React.FC = () => {
         }
 
         setMessages((prev) => [...prev, { role: 'assistant', content: aiContent }]);
-        if (aiContent.includes('Perfil salvo com sucesso!')) {
+        if (isProfileComplete(aiContent)) {
           setProfileSaved(true);
         }
       }
@@ -214,7 +251,16 @@ export const PreCadastroChat: React.FC = () => {
 
       {/* Input or CTA */}
       <div className="flex-shrink-0 p-4 bg-[#000000] border-t border-gray-800">
-        {profileSaved ? (
+        {isRedirecting ? (
+          <div className="flex flex-col items-center gap-3 py-4">
+            <div className="flex gap-1">
+              <span className="w-2 h-2 rounded-full bg-[#00FF00] animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-2 h-2 rounded-full bg-[#00FF00] animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-2 h-2 rounded-full bg-[#00FF00] animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+            <p className="text-sm text-gray-400">Redirecionando para seu plano...</p>
+          </div>
+        ) : profileSaved ? (
           <button
             onClick={handleAccessDashboard}
             className="w-full py-4 px-6 rounded-2xl font-bold text-lg bg-[#00FF00] text-black hover:bg-[#00DD00] active:scale-[0.98] transition-all shadow-[0_0_20px_rgba(0,255,0,0.3)]"
