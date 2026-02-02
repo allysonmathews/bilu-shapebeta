@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useUser } from '../context/UserContext';
 import { usePlan } from '../context/PlanContext';
 import { Card } from '../components/ui/Card';
@@ -26,7 +26,7 @@ export const DietView: React.FC = () => {
     { key: 'sunday', label: 'Domingo', short: 'Dom' },
   ];
 
-  if (isLoading || !plan || !plan.weeks?.length) {
+  if (isLoading) {
     return (
       <div className="p-8 text-center">
         <NeonSpinner size={48} />
@@ -36,11 +36,50 @@ export const DietView: React.FC = () => {
     );
   }
 
+  if (!plan || !plan.weeks?.length) {
+    return (
+      <div className="p-8 text-center">
+        <p className="text-alien-green font-medium mt-4">Nenhum cardápio disponível</p>
+        <p className="text-gray-400 text-sm mt-2">
+          Complete o onboarding ou atualize seu perfil para gerar seu plano alimentar.
+        </p>
+      </div>
+    );
+  }
+
   const currentWeek = plan.weeks?.[selectedWeek - 1];
   if (!currentWeek) {
     return (
       <div className="p-4 text-center text-gray-400">
         <p>Semana não encontrada.</p>
+      </div>
+    );
+  }
+
+  const hasMeals = (): boolean => {
+    const dm = currentWeek.dailyMeals;
+    if (dm) {
+      const all = [
+        dm.monday ?? [],
+        dm.tuesday ?? [],
+        dm.wednesday ?? [],
+        dm.thursday ?? [],
+        dm.friday ?? [],
+        dm.saturday ?? [],
+        dm.sunday ?? [],
+      ];
+      if (all.some((arr) => Array.isArray(arr) && arr.length > 0)) return true;
+    }
+    return Array.isArray(currentWeek.meals) && currentWeek.meals.length > 0;
+  };
+
+  if (!hasMeals()) {
+    return (
+      <div className="p-8 text-center">
+        <p className="text-alien-green font-medium mt-4">Nenhuma refeição nesta semana</p>
+        <p className="text-gray-400 text-sm mt-2">
+          Seu cardápio para a Semana {selectedWeek} ainda está sendo preparado.
+        </p>
       </div>
     );
   }
@@ -203,63 +242,11 @@ export const DietView: React.FC = () => {
       }));
   };
 
-  // Debug: identificar fonte dos dados da lista de compras
-  console.log('DADOS DA API:', plan?.dietaApi?.lista_compras);
-  console.log('DADOS DO CARDÁPIO:', selectedWeek);
+  const groceryList = useMemo(
+    () => gerarListaDeComprasCorrigida(selectedWeek),
+    [plan, selectedWeek]
+  );
 
-  // Força uso de gerarListaDeComprasCorrigida (ignora plan.dietaApi?.lista_compras)
-  const groceryList = gerarListaDeComprasCorrigida(selectedWeek);
-
-  /**
-   * Função de teste temporária: valida sincronização entre cardápio e lista de compras.
-   * Detecta excessos (na lista mas não na dieta) e ausências (na dieta mas não na lista).
-   */
-  const validarSincronizacao = () => {
-    const week = plan?.weeks?.[selectedWeek - 1];
-    if (!week) return;
-
-    const dietaItens = new Set<string>();
-    const dailyMeals = week.dailyMeals;
-    const refeicoes = dailyMeals
-      ? (dailyMeals.monday ?? dailyMeals.tuesday ?? dailyMeals.wednesday ?? [])
-      : Array.isArray(week.meals) ? week.meals : [];
-
-    refeicoes.forEach((refeicao) => {
-      (refeicao.foods ?? []).forEach((item) => {
-        const portionInfo = extractPortionInfo(item.name ?? '');
-        const nomeBase = portionInfo.baseName?.trim() || (item.name ?? '').trim();
-        if (nomeBase) dietaItens.add(nomeBase.trim().toLowerCase());
-      });
-    });
-
-    const listaItens = new Set<string>();
-    groceryList.forEach((item) => {
-      if (item.name) listaItens.add(item.name.trim().toLowerCase());
-    });
-
-    const excesso = [...listaItens].filter((n) => !dietaItens.has(n));
-    const ausencia = [...dietaItens].filter((n) => !listaItens.has(n));
-
-    console.log('\n=== VALIDAÇÃO DE SINCRONIZAÇÃO (Cardápio x Lista de Compras) ===');
-    if (excesso.length > 0) {
-      console.log('\n⚠️ EXCESSO - Itens na lista de compras que NÃO estão na dieta:');
-      console.table(excesso.map((nome) => ({ item: nome })));
-    } else {
-      console.log('\n✓ Nenhum excesso detectado.');
-    }
-    if (ausencia.length > 0) {
-      console.log('\n⚠️ AUSÊNCIA - Itens na dieta que NÃO estão na lista de compras:');
-      console.table(ausencia.map((nome) => ({ item: nome })));
-    } else {
-      console.log('\n✓ Nenhuma ausência detectada.');
-    }
-    console.log('===============================================================\n');
-  };
-
-  useEffect(() => {
-    validarSincronizacao();
-  }, [selectedWeek, plan]);
-  
   // Separate items into "A comprar" and "Já comprado"
   const itemsToBuy = groceryList.filter(item => !checkedItems.has(item.id));
   const itemsBought = groceryList.filter(item => checkedItems.has(item.id));
@@ -390,7 +377,7 @@ export const DietView: React.FC = () => {
             }}
             className="bg-card-bg border border-gray-700 rounded-lg px-3 py-2 text-white"
           >
-            {(plan.weeks ?? []).map((w, i) => (
+            {(plan.weeks ?? []).map((_, i) => (
               <option key={i} value={i + 1}>Semana {i + 1}</option>
             ))}
           </select>
@@ -480,7 +467,11 @@ export const DietView: React.FC = () => {
                             <p className="text-gray-300 text-sm flex-1">
                               • {displayName || `${food.name ?? ''} (${food.quantity ?? 1})`}
                             </p>
-                            {!isApiDiet && <SwapButton onClick={() => handleSwapFood(meal.id, food.id)} />}
+                            <SwapButton
+                              onClick={() => handleSwapFood(meal.id, food.id)}
+                              title="Trocar alimento"
+                              className="bg-alien-green hover:bg-[#2EE010] text-deep-bg"
+                            />
                           </div>
                         );
                       })

@@ -274,3 +274,74 @@ export async function getDietJournalEntries(
     return [];
   }
 }
+
+/** Registro de consumo de água do dia (daily_water). */
+export interface DailyWaterRow {
+  user_id: string;
+  log_date: string;
+  consumed_ml: number;
+  daily_goal_ml?: number;
+}
+
+/**
+ * Busca o consumed_ml do usuário para a data (hoje). Retorna 0 se não houver registro.
+ */
+export async function getDailyWaterConsumedMl(userId: string, logDate: string): Promise<number> {
+  try {
+    const { data, error } = await supabase
+      .from('daily_water')
+      .select('consumed_ml')
+      .eq('user_id', userId)
+      .eq('log_date', logDate)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('[Supabase] getDailyWaterConsumedMl: erro', error.message);
+      return 0;
+    }
+    const row = data as DailyWaterRow | null;
+    const ml = row?.consumed_ml;
+    return ml != null && Number.isFinite(Number(ml)) ? Math.max(0, Math.round(Number(ml))) : 0;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[Supabase] getDailyWaterConsumedMl: exceção', message);
+    return 0;
+  }
+}
+
+/**
+ * Upsert do consumed_ml para o usuário na data. Inclui daily_goal_ml para não violar integridade.
+ * Dispare em cada clique em '+' ou '-'. updated_at é gerenciado pelo banco.
+ */
+export async function upsertDailyWater(
+  userId: string,
+  logDate: string,
+  consumed_ml: number,
+  daily_goal_ml: number
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const consumed = Math.max(0, Math.round(Number(consumed_ml)) || 0);
+    const goal = Math.max(0, Math.round(Number(daily_goal_ml)) || 2000);
+    const row = {
+      user_id: userId,
+      log_date: logDate,
+      consumed_ml: consumed,
+      daily_goal_ml: goal,
+    };
+
+    const { error } = await supabase.from('daily_water').upsert(row, {
+      onConflict: 'user_id,log_date',
+      ignoreDuplicates: false,
+    });
+
+    if (error) {
+      console.warn('[Supabase] upsertDailyWater: erro', error.message);
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn('[Supabase] upsertDailyWater: exceção', message);
+    return { ok: false, error: message };
+  }
+}

@@ -1,11 +1,12 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useUser } from '../context/UserContext';
 import { Card } from '../components/ui/Card';
 import { Check, Droplet, Utensils, Dumbbell, Camera, X, ImageIcon } from 'lucide-react';
 import { DayOfWeek, WorkoutDay } from '../types';
 import { translateMuscleGroup } from '../utils/muscleGroupTranslations';
+import { calculateWaterGoal, getActivityLevelFromPreferences, mlToGlasses, GLASS_ML, getIdealWaterPaceMl } from '../utils/waterGoal';
 import { NeonSpinner } from '../components/ui/NeonSpinner';
-import { supabase, getDietJournalEntries, saveDietJournalEntry, type DietJournalRow } from '../lib/supabase';
+import { supabase, getDietJournalEntries, saveDietJournalEntry, getDailyWaterConsumedMl, upsertDailyWater, type DietJournalRow } from '../lib/supabase';
 
 /** Dados em revisão antes de salvar (editáveis no modal) - macros ocultos mas preservados no estado */
 interface ReviewData {
@@ -89,7 +90,7 @@ const getTodayDateString = (): string => {
 export const DailyJournal: React.FC = () => {
   const { user, plan, onboardingData, completedMeals, toggleMealCompletion } = useUser();
   const displayName = user?.displayName?.trim() || 'Bilu';
-  const [waterGlasses, setWaterGlasses] = useState(0);
+  const [waterConsumedMl, setWaterConsumedMl] = useState(0);
   const [completedWorkout, setCompletedWorkout] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
@@ -99,6 +100,31 @@ export const DailyJournal: React.FC = () => {
   const todayDateForDiary = getTodayDateString();
   const [savedDiaryEntries, setSavedDiaryEntries] = useState<DiaryEntry[]>([]);
   const [loadingDiary, setLoadingDiary] = useState(true);
+
+  // Carregar consumed_ml do dia ao montar e quando data/sessão mudar (tabela daily_water)
+  useEffect(() => {
+    let cancelled = false;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (cancelled || !session?.user?.id) return;
+      getDailyWaterConsumedMl(session.user.id, todayDateForDiary).then((ml) => {
+        if (!cancelled) setWaterConsumedMl(ml);
+      });
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (cancelled) return;
+      if (session?.user?.id) {
+        getDailyWaterConsumedMl(session.user.id, todayDateForDiary).then((ml) => {
+          if (!cancelled) setWaterConsumedMl(ml);
+        });
+      } else {
+        if (!cancelled) setWaterConsumedMl(0);
+      }
+    });
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+  }, [todayDateForDiary]);
 
   // Carregar entradas do diário do Supabase para o dia atual (getDietJournalEntries)
   const loadDiaryForToday = React.useCallback(() => {
@@ -201,6 +227,35 @@ export const DailyJournal: React.FC = () => {
     };
   }, [plan]);
 
+  // Meta diária de água (ml) — só recalcula quando peso, atividade ou idade mudam
+  const waterGoalMl = useMemo(() => {
+    if (!onboardingData) return 2000;
+    const weight = onboardingData.biometrics?.weight ?? 0;
+    const age = onboardingData.biometrics?.age;
+    const prefs = onboardingData.preferences;
+    const activityLevel = getActivityLevelFromPreferences(
+      prefs?.workoutDaysPerWeek ?? 0,
+      prefs?.workoutDuration ?? 0
+    );
+    return calculateWaterGoal(weight, activityLevel, age);
+  }, [
+    onboardingData?.biometrics?.weight,
+    onboardingData?.biometrics?.age,
+    onboardingData?.preferences?.workoutDaysPerWeek,
+    onboardingData?.preferences?.workoutDuration,
+  ]);
+
+  const waterGoalGlasses = mlToGlasses(waterGoalMl);
+
+  // Ritmo ideal (ml que deveria ter consumido até agora) — baseado em acordar/dormir
+  const idealPaceMl = useMemo(() => {
+    const wake = onboardingData?.preferences?.wakeTime;
+    const sleep = onboardingData?.preferences?.sleepTime;
+    return getIdealWaterPaceMl(waterGoalMl, wake, sleep, new Date());
+  }, [waterGoalMl, onboardingData?.preferences?.wakeTime, onboardingData?.preferences?.sleepTime]);
+
+  const isBehindWaterPace = waterConsumedMl < idealPaceMl;
+
   if (!plan || !onboardingData || !todayData) {
     return (
       <div className="p-4 text-center text-gray-400">
@@ -221,13 +276,35 @@ export const DailyJournal: React.FC = () => {
     setCompletedWorkout(prev => !prev);
   };
 
-  const addWater = () => {
-    setWaterGlasses(prev => prev + 1);
-  };
+  const goalMl = waterGoalMl ?? 2000;
 
-  const removeWater = () => {
-    setWaterGlasses(prev => Math.max(0, prev - 1));
-  };
+  const addWater = useCallback(() => {
+    setWaterConsumedMl((prev) => {
+      const next = Number(prev) + GLASS_ML;
+      const safeNext = Number.isFinite(next) ? Math.max(0, Math.round(next)) : 0;
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        const uid = session?.user?.id;
+        if (uid && todayDateForDiary) {
+          upsertDailyWater(uid, todayDateForDiary, safeNext, goalMl);
+        }
+      });
+      return safeNext;
+    });
+  }, [todayDateForDiary, goalMl]);
+
+  const removeWater = useCallback(() => {
+    setWaterConsumedMl((prev) => {
+      const next = Math.max(0, Number(prev) - GLASS_ML);
+      const safeNext = Number.isFinite(next) ? Math.round(next) : 0;
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        const uid = session?.user?.id;
+        if (uid && todayDateForDiary) {
+          upsertDailyWater(uid, todayDateForDiary, safeNext, goalMl);
+        }
+      });
+      return safeNext;
+    });
+  }, [todayDateForDiary, goalMl]);
 
   const handleDiscardReview = () => {
     setReviewData(null);
@@ -470,30 +547,67 @@ export const DailyJournal: React.FC = () => {
         </div>
       </Card>
 
-      {/* Water Tracker */}
+      {/* Water Tracker — duas barras: Ritmo Ideal (onde deveria estar) + Consumo Real */}
       <Card>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <Droplet className="text-blue-400" size={24} />
+            <Droplet className="text-cyan-400" size={24} />
             <span className="text-white font-medium">Água</span>
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={removeWater}
-              className="w-8 h-8 rounded-full bg-gray-700 hover:bg-gray-600 flex items-center justify-center text-white"
+              className="w-8 h-8 rounded-full bg-card-bg border border-gray-600 hover:border-alien-green/50 flex items-center justify-center text-white transition-colors"
+              aria-label="Menos um copo"
             >
               −
             </button>
-            <span className="text-alien-green font-bold text-xl w-12 text-center">{waterGlasses}</span>
+            <span className="text-alien-green font-bold text-xl w-12 text-center tabular-nums">{mlToGlasses(waterConsumedMl)}</span>
             <button
               onClick={addWater}
-              className="w-8 h-8 rounded-full bg-blue-500 hover:bg-blue-600 flex items-center justify-center text-white"
+              className="w-8 h-8 rounded-full bg-alien-green/20 border border-alien-green hover:bg-alien-green/30 flex items-center justify-center text-alien-green transition-colors"
+              aria-label="Mais um copo"
             >
               +
             </button>
           </div>
         </div>
-        <p className="text-xs text-gray-500 mt-2">Copos de 250ml</p>
+        <p className="text-alien-green text-sm font-medium tabular-nums mb-3">
+          {waterConsumedMl} / {waterGoalMl} ml
+        </p>
+        <p className="text-xs text-gray-500 mb-3 tabular-nums">
+          {mlToGlasses(waterConsumedMl)} / {waterGoalGlasses} copos de 250 ml
+        </p>
+
+        {/* Corrida contra o tempo: Ritmo Ideal (trilha no fundo) + Consumo Real (azul translúcido por cima) */}
+        <div className="space-y-1.5">
+          <p className="text-xs text-gray-400 flex justify-between">
+            <span>Ritmo ideal</span>
+            <span className="tabular-nums">{idealPaceMl} ml</span>
+          </p>
+          <div className="relative w-full h-2 rounded-full overflow-hidden bg-card-bg">
+            {/* Trilha de fundo: Ritmo Ideal — cor de trilha; laranja/alerta se Consumo Real atrás */}
+            <div
+              className="absolute inset-y-0 left-0 h-full rounded-full z-0 transition-all duration-300"
+              style={{
+                width: `${Math.min(100, (idealPaceMl / goalMl) * 100)}%`,
+                backgroundColor: isBehindWaterPace ? 'rgba(255, 107, 53, 0.85)' : 'rgba(80, 80, 90, 0.6)',
+              }}
+            />
+            {/* Consumo Real: azul translúcido (opacity 0.75) por cima */}
+            <div
+              className="absolute inset-y-0 left-0 h-full rounded-full z-10 transition-all duration-300"
+              style={{
+                width: `${Math.min(100, (waterConsumedMl / goalMl) * 100)}%`,
+                backgroundColor: 'rgba(59, 130, 246, 0.75)',
+              }}
+            />
+          </div>
+          <p className="text-xs text-gray-400 flex justify-between">
+            <span>Consumo real</span>
+            <span className="text-blue-400 tabular-nums">{waterConsumedMl} ml</span>
+          </p>
+        </div>
       </Card>
 
       {/* Analisar prato (câmara / galeria) */}

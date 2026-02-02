@@ -250,8 +250,17 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const currentFood = meal.foods[foodIndex];
     
-    // Encontrar alimento original no mockDatabase (ou usar dados da IA se id começar com ai-)
-    const originalFood = mockFoods.find(f => f.id === currentFoodId);
+    // Encontrar alimento original no mockDatabase: por id ou por nome (para alimentos da API com id ai-*)
+    let originalFood = mockFoods.find(f => f.id === currentFoodId);
+    if (!originalFood && currentFood.name) {
+      const baseName = (currentFood.name || '').replace(/\s*\([^)]+\)\s*/, '').trim().toLowerCase();
+      if (baseName) {
+        originalFood = mockFoods.find(f => {
+          const mockName = f.name.toLowerCase();
+          return baseName.includes(mockName) || mockName.includes(baseName);
+        });
+      }
+    }
     
     if (!originalFood) {
       return plan; // Retorna plano original se não encontrar no database

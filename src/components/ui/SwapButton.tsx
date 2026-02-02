@@ -5,9 +5,10 @@ interface SwapButtonProps {
   onClick: () => void;
   className?: string;
   isLoading?: boolean;
+  title?: string;
 }
 
-export const SwapButton: React.FC<SwapButtonProps> = ({ onClick, className = '', isLoading = false }) => {
+export const SwapButton: React.FC<SwapButtonProps> = ({ onClick, className = '', isLoading = false, title = 'Trocar' }) => {
   return (
     <button
       type="button"
@@ -19,7 +20,7 @@ export const SwapButton: React.FC<SwapButtonProps> = ({ onClick, className = '',
         disabled:opacity-70 disabled:cursor-not-allowed
         ${className}
       `}
-      title="Trocar exercício"
+      title={title}
     >
       {isLoading ? (
         <Loader2 size={16} className="animate-spin" />

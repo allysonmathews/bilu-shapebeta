@@ -121,44 +121,6 @@ export const WorkoutView: React.FC = () => {
     return getWorkoutByDate(selectedDate);
   }, [selectedDate, getWorkoutByDate]);
 
-  // Salvar automaticamente quando sair do modo de edição
-  useEffect(() => {
-    // Só executar quando isEditing mudar de true para false
-    if (!isEditing && historicalWorkout && workoutData?.workout?.id && Object.keys(exerciseWeights).length > 0) {
-      // Salvar todas as alterações feitas durante a edição
-      const exercisesData = workoutData.workout.exercises
-        .filter(ex => ex != null)
-        .map(ex => ({
-          name: ex?.name ?? 'Exercício',
-          weight: exerciseWeights[ex?.id ?? ''] || ex?.weight || 0,
-          done: exerciseDone[ex?.id ?? ''] || false,
-        }));
-      
-      finishWorkout(selectedDate, workoutData.workout.id, exercisesData);
-      
-      // Salvar pesos individuais também
-      Object.keys(exerciseWeights).forEach(exerciseId => {
-        const weight = exerciseWeights[exerciseId];
-        if (weight && weight > 0) {
-          saveWeight(exerciseId, weight, selectedDate);
-        }
-      });
-
-      // Enviar cada exercício com peso para o Supabase (workout_history)
-      (async () => {
-        if (!workoutData?.workout?.exercises) return;
-        for (const ex of workoutData.workout.exercises) {
-          if (!ex?.id || !ex?.name) continue;
-          const weight = exerciseWeights[ex.id];
-          if (weight && weight > 0) {
-            await saveWorkoutLog(ex.name, weight, selectedDate);
-          }
-        }
-      })();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEditing]);
-
   // Calcular qual treino corresponde ao dia selecionado
   // O plano usa workoutDays onde 1=Segunda, 2=Terça, etc., e dayNumber = (week-1)*7 + dayOfWeek
   const workoutData = useMemo(() => {
@@ -353,27 +315,9 @@ export const WorkoutView: React.FC = () => {
     [plan, workoutData, swapExercise, setPlan, historicalWorkout]
   );
 
+  // Apenas atualiza o estado local; persistência ocorre somente no clique do botão "Salvar"
   const handleWeightChange = (exerciseId: string, weight: number) => {
     setExerciseWeights(prev => ({ ...prev, [exerciseId]: weight }));
-    if (workoutData?.workout?.exercises) {
-      const exercise = workoutData.workout.exercises.find(e => e?.id === exerciseId);
-      if (exercise && exercise?.name && weight > 0) {
-        // Usar selectedDate ao invés de new Date() para permitir salvamento em datas retroativas
-        updateExerciseProgress(
-          exerciseId, 
-          exercise.name, 
-          selectedDate, 
-          exercise?.sets ?? 0, 
-          exercise?.reps ?? 0, 
-          weight
-        );
-      }
-    }
-    
-    // Se estiver em modo de edição e for histórico, salvar automaticamente
-    if (isEditing && historicalWorkout && weight > 0) {
-      saveWeight(exerciseId, weight, selectedDate);
-    }
   };
 
   const handleSaveWeight = (exerciseId: string, weight: number) => {
@@ -394,13 +338,25 @@ export const WorkoutView: React.FC = () => {
         return;
       }
 
-      // Passar selectedDate explicitamente para salvar na data correta (permite datas retroativas)
+      // Persistência exclusiva no clique em "Salvar": contexto de progresso
       saveWeight(exerciseId, weight, selectedDate);
       setLastSavedWeights(prev => ({ ...prev, [exerciseId]: weight }));
       setSavedExercises(prev => new Set(prev).add(exerciseId));
 
-      // Enviar para Supabase (workout_history) com ID do usuário logado
+      // Atualizar progresso no UserContext (histórico de exercícios)
       const exercise = workoutData?.workout?.exercises.find(e => e?.id === exerciseId);
+      if (exercise?.name) {
+        updateExerciseProgress(
+          exerciseId,
+          exercise.name,
+          selectedDate,
+          exercise?.sets ?? 0,
+          exercise?.reps ?? 0,
+          weight
+        );
+      }
+
+      // Persistência no Supabase (workout_history)
       const exerciseName = exercise?.name ?? 'Exercício';
       (async () => {
         if (weight > 0) {
@@ -419,7 +375,7 @@ export const WorkoutView: React.FC = () => {
           }));
         finishWorkout(selectedDate, workoutData.workout.id, exercisesData);
       }
-      
+
       setTimeout(() => {
         setSavedExercises(prev => {
           const newSet = new Set(prev);
@@ -838,6 +794,7 @@ export const WorkoutView: React.FC = () => {
                         <SwapButton
                           onClick={() => handleSwap(exercise.id, index)}
                           isLoading={swappingIndex === index}
+                          title="Trocar exercício"
                         />
                       )}
                     </div>

@@ -11,6 +11,7 @@ export default {
         'bilu-purple': '#9D00FF',
         'deep-bg': '#050505',
         'card-bg': '#121212',
+        'bilu-alert': '#FF6B35',
       },
     },
   },
