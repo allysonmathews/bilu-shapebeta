@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useUser } from '../context/UserContext';
 import { usePlan } from '../context/PlanContext';
 import { Card } from '../components/ui/Card';
@@ -73,18 +73,19 @@ export const DietView: React.FC = () => {
   // Extract portion value and unit from food name
   const extractPortionInfo = (foodName: string): { value: number; unit: string; baseName: string } => {
     // Try to extract value from parentheses: "Arroz (100g)" → { value: 100, unit: 'g' }
-    // Also match: "(1 unidade)", "(2 unidades)", "(1 colher)", "(2 fatias)"
-    const parenMatch = foodName.match(/\((\d+)\s*(g|kg|gr|ml|l|L|un|unidade|unidades|colher|colheres|fatia|fatias)\)/i);
+    // Also match: "(1 unidade)", "(2 unidades)", "(1 colher)", "(2 fatias)", "(1 concha)"
+    const parenMatch = foodName.match(/\((\d+(?:[.,]\d+)?)\s*(g|kg|gr|ml|l|L|un|unidade|unidades|colher|colheres|fatia|fatias|concha|conchas)\)/i);
     
     if (parenMatch) {
-      const value = parseInt(parenMatch[1]);
+      const value = parseFloat(parenMatch[1].replace(',', '.'));
       const unitStr = parenMatch[2].toLowerCase();
       
-      // Normalize units
+      // Normalize units (preserva g, kg, ml, unidades, concha)
       let unit = 'g';
       if (unitStr === 'kg') unit = 'kg';
       else if (unitStr === 'g' || unitStr === 'gr') unit = 'g';
       else if (unitStr === 'ml' || unitStr === 'l') unit = 'ml';
+      else if (unitStr === 'concha' || unitStr === 'conchas') unit = 'concha';
       else if (unitStr === 'un' || unitStr === 'unidade' || unitStr === 'unidades' || 
                unitStr === 'colher' || unitStr === 'colheres' ||
                unitStr === 'fatia' || unitStr === 'fatias') {
@@ -131,112 +132,133 @@ export const DietView: React.FC = () => {
     return { value, unit, baseName: foodName };
   };
 
-  // Generate Grocery List for selected week
-  // CORRIGIDO: Agora calcula corretamente somando TODAS as ocorrências da semana inteira
-  const generateGroceryList = (weekNumber: number) => {
+  /**
+   * Gera a lista de compras consolidada baseada nas refeições da semana.
+   * Regras:
+   * - Varredura completa: itera sobre TODAS as refeições do dia (07:00, 11:00, 14:00, etc.) sem filtrar por nome
+   * - Normalização: usa nome.trim().toLowerCase() como chave para consolidar (ex: Banana em horários diferentes)
+   * - Cálculo semanal: multiplica a quantidade diária por 7 para "Lista de Compras - Semana N"
+   * - Unidades: preserva g, kg, ml, unidades, concha
+   */
+  const gerarListaDeComprasCorrigida = (weekNumber: number) => {
     const week = plan?.weeks?.[weekNumber - 1];
     if (!week) return [];
 
-    const foodMap = new Map<string, { 
-      name: string; 
-      totalQuantity: number; 
-      frequency: number;
-      unit: string;
-      baseName: string;
-    }>();
+    const consolidado: Record<string, { nome: string; quantidade_total: number; unidade: string; comprado: boolean }> = {};
 
     const dailyMeals = week.dailyMeals;
-    const allMeals = dailyMeals
-      ? [
-          ...(dailyMeals.monday ?? []),
-          ...(dailyMeals.tuesday ?? []),
-          ...(dailyMeals.wednesday ?? []),
-          ...(dailyMeals.thursday ?? []),
-          ...(dailyMeals.friday ?? []),
-          ...(dailyMeals.saturday ?? []),
-          ...(dailyMeals.sunday ?? []),
-        ]
-      : (Array.isArray(week.meals) ? week.meals : []);
+    const umDiaDeRefeicoes: Meal[] = dailyMeals
+      ? (dailyMeals.monday ?? dailyMeals.tuesday ?? dailyMeals.wednesday ?? [])
+      : Array.isArray(week.meals)
+        ? week.meals
+        : [];
+    const todasRefeicoes: Meal[] = umDiaDeRefeicoes;
 
-    allMeals.forEach(meal => {
-      (meal.foods ?? []).forEach(food => {
-        const portionInfo = extractPortionInfo(food.name);
-        const key = portionInfo.baseName; // Use base name as key to group same foods
-        
-        // FÓRMULA CORRIGIDA: Peso Total = (Tamanho da Porção) * (Quantidade) * (Número de ocorrências)
-        // Cada ocorrência adiciona: portionValue * quantity
-        const portionValue = portionInfo.value;
-        const quantity = food.quantity || 1;
-        
-        // Normalizar para gramas se necessário para somar corretamente
-        let contribution = portionValue * quantity;
-        let unit = portionInfo.unit;
-        
-        // Se a unidade for 'un', manter como está (não converter)
-        // Se for ml, manter como ml (não converter para g)
-        // Se for kg, converter para g para somar
-        if (unit === 'kg') {
-          contribution = contribution * 1000; // Converter kg para g
-          unit = 'g'; // Usar g como unidade base
+    todasRefeicoes.forEach((refeicao) => {
+      const itens = refeicao.foods ?? [];
+      if (!Array.isArray(itens)) return;
+
+      itens.forEach((item) => {
+        const nomeOriginal = (item.name ?? '').trim();
+        if (!nomeOriginal) return;
+
+        const portionInfo = extractPortionInfo(item.name ?? '');
+        const nomeBase = portionInfo.baseName?.trim() || nomeOriginal;
+        const nomeChave = nomeBase.toLowerCase();
+
+        const qtdPorOcorrencia = (portionInfo.value || 1) * (item.quantity ?? 1);
+        const qtdDiaria = qtdPorOcorrencia;
+        const qtdSemanal = qtdDiaria * 7;
+
+        let unidade = portionInfo.unit || 'un';
+        let valorParaSoma = qtdSemanal;
+
+        if (unidade === 'kg') {
+          valorParaSoma = qtdSemanal * 1000;
+          unidade = 'g';
         }
-        
-        const existing = foodMap.get(key);
-        
-        if (existing) {
-          // Verificar se a unidade é compatível
-          // Se a unidade existente for diferente e não for 'un', normalizar
-          if (existing.unit !== unit && existing.unit !== 'un' && unit !== 'un') {
-            // Se ambos são g ou ml, pode somar diretamente
-            if ((existing.unit === 'g' && unit === 'g') || 
-                (existing.unit === 'ml' && unit === 'ml')) {
-              existing.totalQuantity += contribution;
-              existing.frequency += 1;
-            } else {
-              // Unidades incompatíveis - manter a primeira encontrada e somar valores
-              // (assumindo que são a mesma unidade base)
-              existing.totalQuantity += contribution;
-              existing.frequency += 1;
-            }
-          } else if (existing.unit === unit) {
-            // Unidades iguais - somar normalmente
-            existing.totalQuantity += contribution;
-            existing.frequency += 1;
-          } else {
-            // Unidades diferentes mas uma é 'un' - manter separado ou usar a primeira
-            existing.totalQuantity += contribution;
-            existing.frequency += 1;
-          }
+
+        if (consolidado[nomeChave]) {
+          consolidado[nomeChave].quantidade_total += valorParaSoma;
         } else {
-          foodMap.set(key, {
-            name: portionInfo.baseName,
-            totalQuantity: contribution,
-            frequency: 1,
-            unit: unit, // Usar unidade normalizada
-            baseName: portionInfo.baseName,
-          });
+          consolidado[nomeChave] = {
+            nome: nomeBase,
+            quantidade_total: valorParaSoma,
+            unidade,
+            comprado: false,
+          };
         }
       });
     });
 
-    return Array.from(foodMap.values())
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map(item => ({
-        ...item,
-        id: item.name, // Use name as ID for checkbox tracking
+    return Object.values(consolidado)
+      .sort((a, b) => a.nome.localeCompare(b.nome))
+      .map((item) => ({
+        id: item.nome,
+        name: item.nome,
+        totalQuantity: item.quantidade_total,
+        frequency: 1,
+        unit: item.unidade,
+        baseName: item.nome,
       }));
   };
 
-  const apiLista = plan?.dietaApi?.lista_compras;
-  const groceryList = Array.isArray(apiLista) && apiLista.length > 0
-    ? apiLista.map((item, i) => ({
-        id: `${item.item}-${i}`,
-        name: item.item,
-        totalQuantity: 1,
-        frequency: 1,
-        unit: item.quantidade,
-        baseName: item.item,
-      }))
-    : generateGroceryList(selectedWeek);
+  // Debug: identificar fonte dos dados da lista de compras
+  console.log('DADOS DA API:', plan?.dietaApi?.lista_compras);
+  console.log('DADOS DO CARDÁPIO:', selectedWeek);
+
+  // Força uso de gerarListaDeComprasCorrigida (ignora plan.dietaApi?.lista_compras)
+  const groceryList = gerarListaDeComprasCorrigida(selectedWeek);
+
+  /**
+   * Função de teste temporária: valida sincronização entre cardápio e lista de compras.
+   * Detecta excessos (na lista mas não na dieta) e ausências (na dieta mas não na lista).
+   */
+  const validarSincronizacao = () => {
+    const week = plan?.weeks?.[selectedWeek - 1];
+    if (!week) return;
+
+    const dietaItens = new Set<string>();
+    const dailyMeals = week.dailyMeals;
+    const refeicoes = dailyMeals
+      ? (dailyMeals.monday ?? dailyMeals.tuesday ?? dailyMeals.wednesday ?? [])
+      : Array.isArray(week.meals) ? week.meals : [];
+
+    refeicoes.forEach((refeicao) => {
+      (refeicao.foods ?? []).forEach((item) => {
+        const portionInfo = extractPortionInfo(item.name ?? '');
+        const nomeBase = portionInfo.baseName?.trim() || (item.name ?? '').trim();
+        if (nomeBase) dietaItens.add(nomeBase.trim().toLowerCase());
+      });
+    });
+
+    const listaItens = new Set<string>();
+    groceryList.forEach((item) => {
+      if (item.name) listaItens.add(item.name.trim().toLowerCase());
+    });
+
+    const excesso = [...listaItens].filter((n) => !dietaItens.has(n));
+    const ausencia = [...dietaItens].filter((n) => !listaItens.has(n));
+
+    console.log('\n=== VALIDAÇÃO DE SINCRONIZAÇÃO (Cardápio x Lista de Compras) ===');
+    if (excesso.length > 0) {
+      console.log('\n⚠️ EXCESSO - Itens na lista de compras que NÃO estão na dieta:');
+      console.table(excesso.map((nome) => ({ item: nome })));
+    } else {
+      console.log('\n✓ Nenhum excesso detectado.');
+    }
+    if (ausencia.length > 0) {
+      console.log('\n⚠️ AUSÊNCIA - Itens na dieta que NÃO estão na lista de compras:');
+      console.table(ausencia.map((nome) => ({ item: nome })));
+    } else {
+      console.log('\n✓ Nenhuma ausência detectada.');
+    }
+    console.log('===============================================================\n');
+  };
+
+  useEffect(() => {
+    validarSincronizacao();
+  }, [selectedWeek, plan]);
   
   // Separate items into "A comprar" and "Já comprado"
   const itemsToBuy = groceryList.filter(item => !checkedItems.has(item.id));
@@ -305,20 +327,21 @@ export const DietView: React.FC = () => {
     return foodName.replace(/\s*\([^)]+\)\s*/, '').trim();
   };
 
-  // Format quantity with strict pattern: "g", "ml", "uni"
+  // Format quantity with strict pattern: "g", "kg", "ml", "uni", "concha"
   const formatQuantity = (amount: number, unit: string) => {
-    // Tenta extrair números da unidade (ex: '100g' -> 100)
+    const u = (unit ?? '').toLowerCase();
+    if (!u) return `${Math.round(amount)} un`;
+
     const match = unit.match(/(\d+)/);
     const baseQty = match ? parseInt(match[0]) : 1;
-    
-    // Calcula o total real
     const total = Math.round(amount * baseQty);
 
-    // Define o sufixo padrão
-    let suffix = 'uni'; 
-    if (unit.toLowerCase().includes('ml')) suffix = 'ml';
-    else if (unit.toLowerCase().includes('g') && !unit.toLowerCase().includes('uni')) suffix = 'g'; // Evita 'uni' se for gramas
-    
+    let suffix = 'un';
+    if (u.includes('concha')) suffix = total === 1 ? 'concha' : 'conchas';
+    else if (u.includes('ml')) suffix = 'ml';
+    else if ((u.includes('g') || u === 'kg') && !u.includes('un')) suffix = 'g';
+    else if (u === 'un' || u.includes('unidade')) suffix = total === 1 ? 'unidade' : 'unidades';
+
     return `${total} ${suffix}`;
   };
 
@@ -518,9 +541,9 @@ export const DietView: React.FC = () => {
                             <p className="text-white font-medium mb-1">{item.name}</p>
                             <div className="flex gap-4 text-sm">
                               <span className="text-alien-green">
-                                Total: <strong>{plan.dietaApi?.lista_compras ? item.unit : formatQuantity(item.totalQuantity, item.unit)}</strong>
+                                Total: <strong>{formatQuantity(item.totalQuantity, item.unit)}</strong>
                               </span>
-                              {!plan.dietaApi?.lista_compras && (
+                              {(
                               <span className="text-bilu-purple">
                                 {item.frequency} {item.frequency === 1 ? 'refeição' : 'refeições'}
                               </span>
@@ -556,9 +579,9 @@ export const DietView: React.FC = () => {
                             <p className="text-white font-medium mb-1 line-through">{item.name}</p>
                             <div className="flex gap-4 text-sm">
                               <span className="text-alien-green line-through opacity-70">
-                                Total: <strong>{plan.dietaApi?.lista_compras ? item.unit : formatQuantity(item.totalQuantity, item.unit)}</strong>
+                                Total: <strong>{formatQuantity(item.totalQuantity, item.unit)}</strong>
                               </span>
-                              {!plan.dietaApi?.lista_compras && (
+                              {(
                               <span className="text-bilu-purple line-through opacity-70">
                                 {item.frequency} {item.frequency === 1 ? 'refeição' : 'refeições'}
                               </span>

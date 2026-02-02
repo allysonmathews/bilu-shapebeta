@@ -257,6 +257,11 @@ export const ProfileView: React.FC = () => {
     setAllergiesInput('');
   };
 
+  // Callback estável para evitar loop infinito no InjuryMap (Maximum update depth exceeded)
+  const handleInjuryMapChange = useCallback((newInjuries: Injury[]) => {
+    setInjuries(newInjuries);
+  }, []);
+
   if (!onboardingData) {
     return (
       <div className="p-4 text-center text-gray-400">
@@ -837,7 +842,7 @@ export const ProfileView: React.FC = () => {
                   <div className="mt-4">
                     <InjuryMap
                       initialInjuries={injuries}
-                      onChange={(newInjuries) => setInjuries(newInjuries)}
+                      onChange={handleInjuryMapChange}
                     />
                   </div>
                 )}

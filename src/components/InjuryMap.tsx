@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { MuscleGroup, JointGroup } from '../data/mockDatabase';
 
 export type Severity = 'low' | 'medium' | 'high';
@@ -644,17 +644,22 @@ export const InjuryMap: React.FC<InjuryMapProps> = ({
     setActiveSeveritySelector(null);
   }, []);
 
-  // Converter lesões para o formato de saída
+  // Ref para onChange evita loop infinito se o pai passar callback instável
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  // Converter lesões para o formato de saída - depende apenas de injuries (não de onChange)
   useEffect(() => {
-    if (onChange) {
+    const cb = onChangeRef.current;
+    if (cb) {
       const injuriesArray: Injury[] = Array.from(injuries.entries()).map(([id, data]) => ({
         id,
         type: data.type,
         severity: data.severity,
       }));
-      onChange(injuriesArray);
+      cb(injuriesArray);
     }
-  }, [injuries, onChange]);
+  }, [injuries]);
 
   // Função para remover lesão
   const removeInjury = useCallback((id: string) => {
