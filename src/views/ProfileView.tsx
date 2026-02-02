@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useUser } from '../context/UserContext';
 import { regenerateAllPlans } from '../context/PlanContext';
+import { supabase } from '../lib/supabase';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -166,7 +167,7 @@ export const ProfileView: React.FC = () => {
     }
   }, [isEditing, onboardingData]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!onboardingData) return;
 
     const updatedData: OnboardingData = {
@@ -200,7 +201,33 @@ export const ProfileView: React.FC = () => {
     };
 
     setOnboardingData(updatedData);
-    
+
+    // Persistir todos os campos do perfil permanentemente no Supabase
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user?.id) {
+      const { error } = await supabase
+        .from('profiles')
+        .upsert(
+          {
+            id: session.user.id,
+            updated_at: new Date().toISOString(),
+            weight: updatedData.biometrics.weight ?? null,
+            height: updatedData.biometrics.height ?? null,
+            age: updatedData.biometrics.age ?? null,
+            biotype: updatedData.biometrics.biotype ?? null,
+            gender: updatedData.biometrics.gender ?? null,
+            meals_per_day: updatedData.preferences.mealsPerDay ?? null,
+            wake_up_time: updatedData.preferences.wakeTime ?? null,
+            sleep_time: updatedData.preferences.sleepTime ?? null,
+            workout_time: updatedData.preferences.workoutTime ?? null,
+          },
+          { onConflict: 'id' }
+        );
+      if (error) {
+        console.error('Erro ao salvar perfil no Supabase:', error.message);
+      }
+    }
+
     // Regenerar o plano com os novos dados
     try {
       const newPlan = regenerateAllPlans(updatedData);
@@ -208,7 +235,7 @@ export const ProfileView: React.FC = () => {
     } catch (error) {
       console.error('Erro ao regenerar plano:', error);
     }
-    
+
     setIsEditing(false);
     setShowInjuryMap(false);
     setShowSuccessMessage(true);

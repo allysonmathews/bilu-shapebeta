@@ -206,7 +206,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user?.id) return;
 
-    const profile = await getPreCadastroProfile(session.user.id);
+    const profile: PreCadastroProfileRow | null = await getPreCadastroProfile(session.user.id);
     if (!profile) return;
 
     const goalRaw = profile.goal ?? profile.objective ?? 'hypertrophy';
@@ -247,13 +247,26 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const biotype = biotypeMap[profile.biotype ?? ''] ?? 'mesomorph';
     const location = locationMap[profile.workout_location ?? ''] ?? 'gym';
 
+    // Horários: colunas do banco em snake_case (API) ou camelCase (migrações antigas)
+    const wakeTime = (profile.wake_up_time ?? profile.wakeTime ?? '').trim() || undefined;
+    const sleepTime = (profile.sleep_time ?? profile.sleepTime ?? '').trim() || undefined;
+    const workoutTime = (profile.workout_time ?? profile.workoutTime ?? '').trim() || undefined;
+
+    const genderFromProfile = profile.gender;
+    const gender =
+      genderFromProfile === 'female'
+        ? 'female'
+        : genderFromProfile === 'other'
+          ? 'other'
+          : 'male';
+
     const minimal: OnboardingData = {
       biometrics: {
-        weight: profile.weight ?? 70,
-        height: profile.height ?? 170,
-        age: profile.age ?? 25,
-        bodyFat: 15,
-        gender: 'male',
+        weight: profile.weight ?? 0,
+        height: profile.height ?? 0,
+        age: profile.age ?? 0,
+        bodyFat: 0,
+        gender,
         biotype,
       },
       restrictions: {
@@ -265,10 +278,10 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         workoutDaysPerWeek: profile.days_per_week ?? 3,
         workoutDuration: 60,
         location,
-        mealsPerDay: 4,
-        wakeTime: '07:00',
-        workoutTime: '18:00',
-        sleepTime: '23:00',
+        mealsPerDay: profile.meals_per_day ?? 4,
+        wakeTime,
+        workoutTime,
+        sleepTime,
       },
     };
 
@@ -328,6 +341,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [clearUserData]);
 
   // Assim que o login for detectado: buscar perfil na tabela profiles e atualizar estado (perfil completo = pular onboarding).
+  // Se existir perfil no banco, carrega os dados do Supabase antes de usar qualquer dado do localStorage.
   useEffect(() => {
     if (authLoading || !user.isAuthenticated || profileCheckDoneRef.current) {
       return;
@@ -345,9 +359,9 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       profileCheckDoneRef.current = true;
       setProfileCheckResult(profile ?? null);
       setProfileCheckLoading(false);
-      // Atualizar estado global: perfil existe = onboarding completo; vazio = mostrar onboarding.
+      // Se existir perfil no banco, buscar dados completos e preencher onboardingData do Supabase (não usar localStorage).
       if (profile) {
-        setUserState((prev) => ({ ...prev, onboardingCompleted: true }));
+        await refreshProfileFromSupabase();
       } else {
         setUserState((prev) => ({ ...prev, onboardingCompleted: false }));
       }
@@ -355,7 +369,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return () => {
       cancelled = true;
     };
-  }, [authLoading, user.isAuthenticated]);
+  }, [authLoading, user.isAuthenticated, refreshProfileFromSupabase]);
 
   return (
     <UserContext.Provider

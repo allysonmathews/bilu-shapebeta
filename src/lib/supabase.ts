@@ -188,7 +188,7 @@ export async function saveDietJournalEntry(
   }
 }
 
-/** Perfil retornado pelo pre-cadastro (weight, height, goal, etc.). */
+/** Perfil retornado pelo pre-cadastro (weight, height, goal, etc.). Inclui colunas de rotina do banco (snake_case ou camelCase). */
 export interface PreCadastroProfileRow {
   id: string;
   weight?: number;
@@ -203,6 +203,16 @@ export interface PreCadastroProfileRow {
   name?: string | null;
   email?: string | null;
   calories?: number;
+  gender?: string | null;
+  /** Refeições por dia (coluna meals_per_day no banco). */
+  meals_per_day?: number;
+  /** Horário que acorda, formato "HH:mm" (coluna wake_up_time no banco; pode vir como wakeTime em migrações antigas). */
+  wake_up_time?: string | null;
+  sleep_time?: string | null;
+  workout_time?: string | null;
+  wakeTime?: string | null;
+  sleepTime?: string | null;
+  workoutTime?: string | null;
 }
 
 /**
