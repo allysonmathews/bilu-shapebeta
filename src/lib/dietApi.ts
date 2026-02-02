@@ -20,38 +20,54 @@ export interface DietProfilePayload {
   allergies?: string[];
 }
 
-/** Converte refeicoes da API para Meal[] no formato interno. */
+/** Converte refeicoes da API para Meal[] no formato interno. Usa titulo (ou titulo_refeicao) e alimentos (ou lista_alimentos_com_quantidade). */
 function mapDietResponseToMeals(diet: DietApiResponse): Meal[] {
-  return diet.refeicoes.map((r, idx) => {
-    const foods = r.lista_alimentos_com_quantidade.map((a, foodIdx) => ({
-      id: `ai-${idx}-${foodIdx}-${a.alimento.replace(/\s/g, '-').toLowerCase()}`,
-      name: `${a.alimento} (${a.quantidade})`,
-      quantity: 1,
-      calories: a.calorias,
-      protein: a.proteina,
-      carbs: a.carboidratos,
-      fat: a.gorduras,
+  const meals = (diet.refeicoes ?? []).map((r, idx) => {
+    const titulo = r.titulo ?? r.titulo_refeicao ?? 'Refeição';
+    const alimentosRaw = r.alimentos ?? (r.lista_alimentos_com_quantidade ?? []).map((a) => ({
+      nome: (a as { alimento?: string; nome?: string }).alimento ?? (a as { alimento?: string; nome?: string }).nome ?? '',
+      quantidade: a.quantidade,
+      calorias: a.calorias,
+      proteina: a.proteina,
+      carboidratos: a.carboidratos,
+      gorduras: a.gorduras,
     }));
-
-    const macros = r.macros_da_ref;
-
+    const foods = alimentosRaw.map((a, foodIdx) => ({
+      id: `ai-${idx}-${foodIdx}-${(a.nome || '').replace(/\s/g, '-').toLowerCase().slice(0, 30)}`,
+      name: a.nome ? `${a.nome} (${a.quantidade})` : a.quantidade,
+      quantity: 1,
+      calories: a.calorias ?? 0,
+      protein: a.proteina ?? 0,
+      carbs: a.carboidratos ?? 0,
+      fat: a.gorduras ?? 0,
+    }));
+    const macros = r.macros_da_ref ?? { calorias: 0, proteina: 0, carboidratos: 0, gorduras: 0 };
+    const totalCalories = foods.reduce((s, f) => s + f.calories, 0) || macros.calorias;
+    const totalProtein = foods.reduce((s, f) => s + f.protein, 0) || macros.proteina;
+    const totalCarbs = foods.reduce((s, f) => s + f.carbs, 0) || macros.carboidratos;
+    const totalFat = foods.reduce((s, f) => s + f.fat, 0) || macros.gorduras;
     return {
-      id: `meal-ai-${idx}-${r.horario.replace(':', '')}`,
-      name: r.titulo_refeicao,
-      time: r.horario,
+      id: `meal-ai-${idx}-${(r.horario || '').replace(':', '')}`,
+      name: titulo,
+      time: r.horario ?? '--:--',
       foods,
-      totalCalories: macros.calorias,
-      totalProtein: macros.proteina,
-      totalCarbs: macros.carboidratos,
-      totalFat: macros.gorduras,
+      totalCalories,
+      totalProtein,
+      totalCarbs,
+      totalFat,
     };
   });
+  return meals;
 }
 
-/** Converte DietApiResponse em FourWeekPlan (1 dia repetido para 7 dias x 4 semanas). */
+/** Converte DietApiResponse em FourWeekPlan (1 dia repetido para 7 dias x 4 semanas). Usa refeicao.titulo -> name, refeicao.alimentos -> foods. */
 export function mapDietToFourWeekPlan(diet: DietApiResponse): FourWeekPlan {
   const meals = mapDietResponseToMeals(diet);
-  const meta = diet.resumo_metabolico;
+  const meta = diet.resumo_metabolico ?? { meta_calorias: 0, meta_proteina: 0, meta_carboidratos: 0, meta_gorduras: 0 };
+
+  if (typeof console !== 'undefined' && console.table && meals.length > 0) {
+    console.table(meals.map((m) => ({ refeicao: m.name, horario: m.time, alimentos: m.foods?.length ?? 0, nomes: m.foods?.map((f) => f.name).join('; ') ?? '' })));
+  }
 
   const dailyMeals: DailyMeals = {
     monday: meals,
@@ -85,7 +101,7 @@ export function mapDietToFourWeekPlan(diet: DietApiResponse): FourWeekPlan {
     startDate: new Date().toISOString(),
     dietaApi: {
       resumo_metabolico: diet.resumo_metabolico,
-      lista_compras: diet.lista_compras,
+      lista_compras: diet.lista_compras ?? [],
     },
   };
 }

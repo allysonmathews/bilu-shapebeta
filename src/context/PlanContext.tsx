@@ -1,4 +1,4 @@
-import React, { createContext, useContext, ReactNode } from 'react';
+import React, { createContext, useContext, useState, ReactNode } from 'react';
 import { OnboardingData, FourWeekPlan, WeeklyPlan, Meal, WorkoutDay, DayOfWeek } from '../types';
 import { mockFoods, mockExercises, findSimilarFood, MealTime, MuscleGroup } from '../data/mockDatabase';
 import { fetchCompletePlanFromApi } from '../lib/aiPlannerApi';
@@ -6,15 +6,13 @@ import type { AIPlannerWeek, AIPlannerExercise } from '../lib/aiPlannerApi';
 import { mapDietToFourWeekPlan } from '../lib/dietApi';
 
 /*
- * REMOVIDO (simplificação pela API unificada):
- * - calculateWorkoutStructure, getSplitConfig, violatesSynergy, getRepsForExercise (workoutGenerator)
- * - Toda a lógica manual de geração de exercícios (generateWorkouts ~450 linhas):
- *   mapeamento de lesões, filtros de segurança, seleção por split/agonista-sinergista,
- *   verificação de sinergia, pool de exercícios por local, regra 10 min/exercício.
- * O treino agora vem diretamente do workout_plan retornado pela IA.
+ * Treino: apenas API unificada ou mock (100 min, Split A-E). Nenhuma lógica legada
+ * (calculateWorkoutStructure, getSplitConfig, generateWorkouts, etc.) é usada aqui.
  */
 
 interface PlanContextType {
+  /** true enquanto generatePlanAsync está em execução (até plano processado e salvo). */
+  isLoading: boolean;
   /** Gera plano completo (dieta + treino via API unificada). Assíncrono. */
   generatePlanAsync: (data: OnboardingData, accessToken?: string | null) => Promise<FourWeekPlan>;
   swapFoodItem: (plan: FourWeekPlan, weekIndex: number, dayOfWeek: DayOfWeek, mealIndex: number, currentFoodId: string) => FourWeekPlan;
@@ -60,8 +58,8 @@ function dayNameToNumber(dayName: string): number {
 
 /**
  * Converte workout_plan da IA em WorkoutDay[].
- * Cada exercício recebe ID único (exerciseId + week + day + index) para evitar chaves duplicadas no React.
- * Se objetivo for weight_loss, garante bloco de cardio como último item com id cardio-final-{week}-{day}.
+ * Cada exercício recebe ID único baseado no minuto em que ocorre (ex-10min, ex-20min) para evitar Duplicate Keys no React.
+ * Cardio (weight_loss) no final com id ex-{minute}min-w{week}-d{day} ou cardio-final-w{week}-d{day}.
  */
 function mapWorkoutPlanToWorkoutDays(
   workoutPlan: AIPlannerWeek[],
@@ -70,6 +68,7 @@ function mapWorkoutPlanToWorkoutDays(
 ): WorkoutDay[] {
   const workouts: WorkoutDay[] = [];
   const addCardio = objective === 'weight_loss';
+  const MINUTES_PER_EXERCISE = 9;
   for (const weekData of workoutPlan) {
     const weekNum = weekData.week ?? workouts.length + 1;
     for (let dayIdx = 0; dayIdx < weekData.workoutDays.length; dayIdx++) {
@@ -79,13 +78,11 @@ function mapWorkoutPlanToWorkoutDays(
       const primaryMuscle = wd.muscleGroups?.[0] ? normalizeMuscleGroup(wd.muscleGroups[0]) : 'chest';
 
       const baseExercises = (wd.exercises ?? []).map((ex: AIPlannerExercise, exIdx: number) => {
-        const slug = ex.name.replace(/\s+/g, '-').toLowerCase().slice(0, 30);
-        const uniqueSuffix = `${weekNum}-${dayIdx}-${exIdx}`;
+        const minute = (exIdx + 1) * MINUTES_PER_EXERCISE;
+        const uniqueId = `ex-${minute}min-w${weekNum}-d${dayIdx}`;
         const mock = mockExercises.find(
           (m) => m.name.toLowerCase().trim() === ex.name.toLowerCase().trim()
         );
-        const baseId = mock ? mock.id : `ai-${slug}`;
-        const uniqueId = `${baseId}-${uniqueSuffix}`;
         if (mock) {
           return {
             id: uniqueId,
@@ -114,7 +111,8 @@ function mapWorkoutPlanToWorkoutDays(
       const hasCardioAsLast = baseExercises.length > 0 &&
         /cardio|esteira|corrida|corda/i.test(baseExercises[baseExercises.length - 1].name);
       if (addCardio && !hasCardioAsLast) {
-        const cardioId = `cardio-final-${weekNum}-${dayIdx}`;
+        const cardioMinute = (baseExercises.length + 1) * MINUTES_PER_EXERCISE;
+        const cardioId = `ex-${cardioMinute}min-w${weekNum}-d${dayIdx}-cardio`;
         exercises = [
           ...baseExercises,
           {
@@ -151,6 +149,8 @@ function mapWorkoutPlanToWorkoutDays(
 }
 
 export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [isLoading, setIsLoading] = useState(false);
+
   /** Plano padrão quando a API retorna incompleto ou ocorre erro de processamento. */
   const getDefaultFourWeekPlan = (): FourWeekPlan => ({
     weeks: Array.from({ length: 4 }, (_, i) => ({
@@ -174,18 +174,19 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     startDate: new Date().toISOString(),
   });
 
-  /** Gera plano completo via API unificada (dieta + treino). Assíncrono. */
+  /** Gera plano completo via API unificada (dieta + treino). Assíncrono. isLoading = true até concluir. */
   const generatePlanAsync = async (data: OnboardingData, accessToken?: string | null): Promise<FourWeekPlan> => {
-    const stableDuration = Number(data?.preferences?.workoutDuration) || 100;
-    const objective = data?.goals?.primary;
-    console.log('Payload enviado:', data);
-    const result = await fetchCompletePlanFromApi(data, accessToken);
-
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
-
+    setIsLoading(true);
     try {
+      const stableDuration = Number(data?.preferences?.workoutDuration) || 100;
+      const objective = data?.goals?.primary;
+      console.log('Payload enviado:', data);
+      const result = await fetchCompletePlanFromApi(data, accessToken);
+
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+
       const hasValidDiet =
         result.diet?.refeicoes && Array.isArray(result.diet.refeicoes);
       const hasValidWorkout =
@@ -200,19 +201,21 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         ? mapWorkoutPlanToWorkoutDays(result.workout_plan, stableDuration, objective)
         : [];
 
-      const weeks: WeeklyPlan[] = plan.weeks.map((w, i) => ({
+      const weeks: WeeklyPlan[] = (plan.weeks ?? []).map((w, i) => ({
         ...w,
         workouts: workoutDays.filter((wk) => wk.week === i + 1),
       }));
 
       return {
         weeks,
-        startDate: plan.startDate,
+        startDate: plan.startDate ?? new Date().toISOString(),
         dietaApi: plan.dietaApi,
       };
     } catch (e) {
       console.warn('Erro ao processar resposta da API, usando plano padrão:', e);
       return getDefaultFourWeekPlan();
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -260,8 +263,8 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (mealName === 'Café da Manhã') return 'cafe';
       if (mealName === 'Almoço') return 'almoco';
       if (mealName === 'Lanche da Tarde' || mealName === 'Lanche da Tarde I' || mealName === 'Lanche da Tarde II') return 'lanche_tarde';
-      if (mealName === 'Pré-Treino') return 'lanche_tarde';
-      if (mealName === 'Pós-Treino') return 'pos_treino';
+      if (mealName === 'Pré-Treino' || mealName === '🔥 Pré-Treino') return 'lanche_tarde';
+      if (mealName === 'Pós-Treino' || mealName === '⚡ Pós-Treino') return 'pos_treino';
       if (mealName === 'Janta' || mealName === 'Jantar') return 'janta';
       if (mealName === 'Ceia') return 'ceia';
       return 'almoco'; // fallback
@@ -429,7 +432,7 @@ export const PlanProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   exportedRegenerateAllPlansAsync = generatePlanAsync;
 
   return (
-    <PlanContext.Provider value={{ generatePlanAsync, swapFoodItem, swapExercise }}>
+    <PlanContext.Provider value={{ isLoading, generatePlanAsync, swapFoodItem, swapExercise }}>
       {children}
     </PlanContext.Provider>
   );

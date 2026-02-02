@@ -6,10 +6,11 @@ import { SwapButton } from '../components/ui/SwapButton';
 import { Meal, DayOfWeek } from '../types';
 import { Utensils, ShoppingCart, Check } from 'lucide-react';
 import { mockFoods } from '../data/mockDatabase';
+import { NeonSpinner } from '../components/ui/NeonSpinner';
 
 export const DietView: React.FC = () => {
   const { plan, setPlan } = useUser();
-  const { swapFoodItem } = usePlan();
+  const { swapFoodItem, isLoading } = usePlan();
   const [selectedWeek, setSelectedWeek] = useState(1);
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>('monday');
   const [activeTab, setActiveTab] = useState<'cardapio' | 'compras'>('cardapio');
@@ -25,41 +26,44 @@ export const DietView: React.FC = () => {
     { key: 'sunday', label: 'Domingo', short: 'Dom' },
   ];
 
-  if (!plan) {
+  if (isLoading || !plan || !plan.weeks?.length) {
     return (
-      <div className="p-4 text-center text-gray-400">
-        <p>Carregando dieta...</p>
+      <div className="p-8 text-center">
+        <NeonSpinner size={48} />
+        <p className="text-alien-green font-medium mt-4">O E.T. Bilu está calculando sua evolução...</p>
+        <p className="text-gray-400 text-sm mt-2">Preparando sua dieta (refeições principais + Pré e Pós-Treino)</p>
       </div>
     );
   }
 
-  const currentWeek = plan.weeks[selectedWeek - 1];
-  
-  // Get meals for selected day
+  const currentWeek = plan.weeks?.[selectedWeek - 1];
+  if (!currentWeek) {
+    return (
+      <div className="p-4 text-center text-gray-400">
+        <p>Semana não encontrada.</p>
+      </div>
+    );
+  }
+
+  // Get meals for selected day (suporta 4 principais + 2 treino = 6 refeições sem quebrar layout)
   const getDayMeals = (): Meal[] => {
-    if (currentWeek.dailyMeals) {
-      return currentWeek.dailyMeals[selectedDay] || [];
-    }
-    // Fallback to old structure (all meals, show all)
-    return currentWeek.meals || [];
+    const dayMealsList = currentWeek.dailyMeals?.[selectedDay];
+    if (Array.isArray(dayMealsList) && dayMealsList.length > 0) return dayMealsList;
+    return Array.isArray(currentWeek.meals) ? currentWeek.meals : [];
   };
 
   const dayMeals = getDayMeals();
 
   const handleSwapFood = (mealId: string, foodId: string) => {
-    if (!plan) return;
+    if (!plan?.weeks?.length) return;
 
-    // Encontrar o índice da refeição no dia selecionado
-    const currentWeek = plan.weeks[selectedWeek - 1];
-    if (!currentWeek.dailyMeals) return;
+    const week = plan.weeks[selectedWeek - 1];
+    const dayMealsList = week?.dailyMeals?.[selectedDay];
+    if (!Array.isArray(dayMealsList)) return;
 
-    const dayMeals = currentWeek.dailyMeals[selectedDay];
-    if (!dayMeals) return;
-
-    const mealIndex = dayMeals.findIndex(m => m.id === mealId);
+    const mealIndex = dayMealsList.findIndex(m => m.id === mealId);
     if (mealIndex === -1) return;
 
-    // Chamar função global swapFoodItem
     const updatedPlan = swapFoodItem(plan, selectedWeek - 1, selectedDay, mealIndex, foodId);
     
     // Atualizar o plano no contexto
@@ -130,7 +134,7 @@ export const DietView: React.FC = () => {
   // Generate Grocery List for selected week
   // CORRIGIDO: Agora calcula corretamente somando TODAS as ocorrências da semana inteira
   const generateGroceryList = (weekNumber: number) => {
-    const week = plan.weeks[weekNumber - 1];
+    const week = plan?.weeks?.[weekNumber - 1];
     if (!week) return [];
 
     const foodMap = new Map<string, { 
@@ -141,22 +145,21 @@ export const DietView: React.FC = () => {
       baseName: string;
     }>();
 
-    // Use dailyMeals if available, otherwise fallback to meals
-    const allMeals = week.dailyMeals 
+    const dailyMeals = week.dailyMeals;
+    const allMeals = dailyMeals
       ? [
-          ...week.dailyMeals.monday,
-          ...week.dailyMeals.tuesday,
-          ...week.dailyMeals.wednesday,
-          ...week.dailyMeals.thursday,
-          ...week.dailyMeals.friday,
-          ...week.dailyMeals.saturday,
-          ...week.dailyMeals.sunday,
+          ...(dailyMeals.monday ?? []),
+          ...(dailyMeals.tuesday ?? []),
+          ...(dailyMeals.wednesday ?? []),
+          ...(dailyMeals.thursday ?? []),
+          ...(dailyMeals.friday ?? []),
+          ...(dailyMeals.saturday ?? []),
+          ...(dailyMeals.sunday ?? []),
         ]
-      : week.meals;
+      : (Array.isArray(week.meals) ? week.meals : []);
 
-    // Iterar por TODAS as refeições da semana (7 dias)
     allMeals.forEach(meal => {
-      meal.foods.forEach(food => {
+      (meal.foods ?? []).forEach(food => {
         const portionInfo = extractPortionInfo(food.name);
         const key = portionInfo.baseName; // Use base name as key to group same foods
         
@@ -223,9 +226,9 @@ export const DietView: React.FC = () => {
       }));
   };
 
-  // Usar lista_compras da API quando disponível (dieta gerada por IA)
-  const groceryList = plan.dietaApi?.lista_compras?.length
-    ? plan.dietaApi.lista_compras.map((item, i) => ({
+  const apiLista = plan?.dietaApi?.lista_compras;
+  const groceryList = Array.isArray(apiLista) && apiLista.length > 0
+    ? apiLista.map((item, i) => ({
         id: `${item.item}-${i}`,
         name: item.item,
         totalQuantity: 1,
@@ -364,7 +367,7 @@ export const DietView: React.FC = () => {
             }}
             className="bg-card-bg border border-gray-700 rounded-lg px-3 py-2 text-white"
           >
-            {plan.weeks.map((w, i) => (
+            {(plan.weeks ?? []).map((w, i) => (
               <option key={i} value={i + 1}>Semana {i + 1}</option>
             ))}
           </select>
@@ -406,19 +409,19 @@ export const DietView: React.FC = () => {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <p className="text-gray-400 text-sm">Calorias</p>
-                <p className="text-alien-green font-bold">{currentWeek.totalCalories} kcal</p>
+                <p className="text-alien-green font-bold">{currentWeek?.totalCalories ?? 0} kcal</p>
               </div>
               <div>
                 <p className="text-gray-400 text-sm">Proteína</p>
-                <p className="text-alien-green font-bold">{currentWeek.totalProtein}g</p>
+                <p className="text-alien-green font-bold">{currentWeek?.totalProtein ?? 0}g</p>
               </div>
               <div>
                 <p className="text-gray-400 text-sm">Carboidratos</p>
-                <p className="text-alien-green font-bold">{currentWeek.totalCarbs}g</p>
+                <p className="text-alien-green font-bold">{currentWeek?.totalCarbs ?? 0}g</p>
               </div>
               <div>
                 <p className="text-gray-400 text-sm">Gorduras</p>
-                <p className="text-alien-green font-bold">{currentWeek.totalFat}g</p>
+                <p className="text-alien-green font-bold">{currentWeek?.totalFat ?? 0}g</p>
               </div>
             </div>
           </Card>
@@ -426,35 +429,41 @@ export const DietView: React.FC = () => {
           {/* Daily Meals */}
           <div>
             <h2 className="text-xl font-bold text-alien-green mb-3">Refeições do Dia</h2>
-            {dayMeals.length > 0 ? (
+            {(dayMeals?.length ?? 0) > 0 ? (
               <div className="space-y-4">
-                {dayMeals.map((meal) => (
+                {(dayMeals ?? []).map((meal) => (
                 <Card key={meal.id}>
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <span className="text-bilu-purple font-bold">{meal.time}</span>
-                      <h3 className="text-white font-bold text-lg">{meal.name}</h3>
+                      <span className="text-bilu-purple font-bold">{meal.time ?? '--:--'}</span>
+                      <h3 className="text-white font-bold text-lg">{meal.name ?? 'Refeição'}</h3>
                     </div>
-                    <span className="text-alien-green font-bold">{meal.totalCalories} kcal</span>
+                    <span className="text-alien-green font-bold">{meal.totalCalories ?? 0} kcal</span>
                   </div>
 
                   <div className="space-y-2">
-                    {meal.foods.map((food) => {
-                      const isApiDiet = food.id.startsWith('ai-');
-                      const foodData = mockFoods.find(f => f.id === food.id);
-                      const displayName = isApiDiet ? food.name : (getCleanFoodName(food.id, food.name) + (foodData ? ` (${formatQuantity(food.quantity || 1, foodData.unit)})` : ` (${food.quantity || 1} uni)`));
-                      return (
-                        <div
-                          key={food.id}
-                          className="flex items-center justify-between p-2 bg-deep-bg rounded border border-gray-800"
-                        >
-                          <p className="text-gray-300 text-sm flex-1">
-                            • {displayName}
-                          </p>
-                          {!isApiDiet && <SwapButton onClick={() => handleSwapFood(meal.id, food.id)} />}
-                        </div>
-                      );
-                    })}
+                    {Array.isArray(meal.foods) && meal.foods.length > 0 ? (
+                      meal.foods.map((food) => {
+                        const isApiDiet = food.id.startsWith('ai-');
+                        const foodData = mockFoods.find(f => f.id === food.id);
+                        const displayName = isApiDiet
+                          ? (food.name ?? '')
+                          : (getCleanFoodName(food.id, food.name) + (foodData ? ` (${formatQuantity(food.quantity || 1, foodData.unit)})` : ` (${food.quantity || 1} uni)`));
+                        return (
+                          <div
+                            key={food.id}
+                            className="flex items-center justify-between p-2 bg-deep-bg rounded border border-gray-800"
+                          >
+                            <p className="text-gray-300 text-sm flex-1">
+                              • {displayName || `${food.name ?? ''} (${food.quantity ?? 1})`}
+                            </p>
+                            {!isApiDiet && <SwapButton onClick={() => handleSwapFood(meal.id, food.id)} />}
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <p className="text-gray-500 text-sm py-2">Sem alimentos registrados</p>
+                    )}
                   </div>
 
                   <div className="mt-3 pt-3 border-t border-gray-800">
@@ -463,9 +472,9 @@ export const DietView: React.FC = () => {
                       <span className="text-alien-green font-bold text-sm">{meal.totalCalories} kcal</span>
                     </div>
                     <div className="flex justify-between text-xs text-gray-400">
-                      <span>P: {meal.totalProtein.toFixed(1)}g</span>
-                      <span>C: {meal.totalCarbs.toFixed(1)}g</span>
-                      <span>G: {meal.totalFat.toFixed(1)}g</span>
+                      <span>P: {(meal.totalProtein ?? 0).toFixed(1)}g</span>
+                      <span>C: {(meal.totalCarbs ?? 0).toFixed(1)}g</span>
+                      <span>G: {(meal.totalFat ?? 0).toFixed(1)}g</span>
                     </div>
                   </div>
                 </Card>

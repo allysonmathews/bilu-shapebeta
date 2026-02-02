@@ -123,7 +123,39 @@ export interface FourWeekPlan {
   };
 }
 
-/** Resposta estruturada da API de dieta (Groq). */
+/** Alimento na estrutura padronizada (titulo + alimentos). */
+export interface RefeicaoAlimento {
+  nome: string;
+  quantidade: string;
+  calorias?: number;
+  proteina?: number;
+  carboidratos?: number;
+  gorduras?: number;
+}
+
+/** Refeição: estrutura padronizada titulo, horario, alimentos. Compatível com legado (titulo_refeicao, lista_alimentos_com_quantidade). */
+export interface RefeicaoApi {
+  titulo?: string;
+  horario: string;
+  titulo_refeicao?: string;
+  alimentos?: RefeicaoAlimento[];
+  lista_alimentos_com_quantidade?: Array<{
+    alimento: string;
+    quantidade: string;
+    calorias: number;
+    proteina: number;
+    carboidratos: number;
+    gorduras: number;
+  }>;
+  macros_da_ref?: {
+    calorias: number;
+    proteina: number;
+    carboidratos: number;
+    gorduras: number;
+  };
+}
+
+/** Resposta estruturada da API de dieta (Groq). Estrutura padronizada: refeicoes[].titulo, refeicoes[].alimentos[].nome/quantidade. */
 export interface DietApiResponse {
   resumo_metabolico: {
     tdee: number;
@@ -132,24 +164,7 @@ export interface DietApiResponse {
     meta_carboidratos: number;
     meta_gorduras: number;
   };
-  refeicoes: Array<{
-    horario: string;
-    titulo_refeicao: string;
-    lista_alimentos_com_quantidade: Array<{
-      alimento: string;
-      quantidade: string;
-      calorias: number;
-      proteina: number;
-      carboidratos: number;
-      gorduras: number;
-    }>;
-    macros_da_ref: {
-      calorias: number;
-      proteina: number;
-      carboidratos: number;
-      gorduras: number;
-    };
-  }>;
+  refeicoes: RefeicaoApi[];
   lista_compras: Array<{
     item: string;
     quantidade: string;

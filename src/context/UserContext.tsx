@@ -156,6 +156,8 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const setPlan = useCallback((newPlan: FourWeekPlan) => {
+    localStorage.removeItem('bilu_plan');
+    lastPlanJsonRef.current = null;
     setPlanState(newPlan);
   }, []);
 

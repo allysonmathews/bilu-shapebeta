@@ -11,10 +11,11 @@ import { saveWorkoutLog } from '../lib/supabase';
 import { Check, Youtube, Calendar, Play } from 'lucide-react';
 import { WorkoutDay, DayOfWeek } from '../types';
 import { translateMuscleGroup } from '../utils/muscleGroupTranslations';
+import { NeonSpinner } from '../components/ui/NeonSpinner';
 
 export const WorkoutView: React.FC = () => {
   const { plan, onboardingData, updateExerciseProgress, setPlan } = useUser();
-  const { swapExercise, generatePlanAsync } = usePlan();
+  const { swapExercise, generatePlanAsync, isLoading } = usePlan();
   const { saveWeight, finishWorkout, getWorkoutByDate, workoutHistory, weightHistory } = useProgress();
   
   // Auto-seed: Gerar plano padrão se não houver plano e houver onboardingData
@@ -161,16 +162,20 @@ export const WorkoutView: React.FC = () => {
   // Calcular qual treino corresponde ao dia selecionado
   // O plano usa workoutDays onde 1=Segunda, 2=Terça, etc., e dayNumber = (week-1)*7 + dayOfWeek
   const workoutData = useMemo(() => {
-    if (!plan) return null;
+    if (!plan?.weeks?.length) return null;
+    const startDateRaw = plan.startDate;
+    if (!startDateRaw || typeof startDateRaw !== 'string') return null;
 
     // Parsear startDate do plano (pode estar em formato ISO ou string)
-    let startDateString = plan.startDate;
+    let startDateString = startDateRaw;
     if (startDateString.includes('T')) {
       startDateString = startDateString.split('T')[0];
     }
-    
+    const parts = startDateString.split('-');
+    if (parts.length < 3) return null;
+
     // Criar objetos Date usando apenas YYYY-MM-DD para evitar problemas de fuso horário
-    const [startYear, startMonth, startDay] = startDateString.split('-').map(Number);
+    const [startYear, startMonth, startDay] = parts.map(Number);
     const [selectedYear, selectedMonth, selectedDay] = selectedDate.split('-').map(Number);
     
     const startDateObj = new Date(startYear, startMonth - 1, startDay);
@@ -205,10 +210,10 @@ export const WorkoutView: React.FC = () => {
     // O plano assume que a semana LÓGICA começa na segunda-feira (dia 1)
     // daysDiff = 0 significa segunda-feira da primeira semana (dia 1)
     const weekNumber = Math.floor(daysDiff / 7) + 1;
-    const weekIndex = Math.max(0, Math.min(weekNumber - 1, 3));
-    const week = plan.weeks[weekIndex];
+    const weekIndex = Math.max(0, Math.min(weekNumber - 1, (plan.weeks?.length ?? 1) - 1));
+    const week = plan.weeks?.[weekIndex];
 
-    if (!week) return null;
+    if (!week?.workouts) return null;
 
     // Calcular o dia absoluto esperado (1-28)
     // O dia absoluto é calculado como: (weekNumber - 1) * 7 + dayOfWeek
@@ -222,9 +227,10 @@ export const WorkoutView: React.FC = () => {
     let workoutIndex = -1;
     let foundWeekIndex = weekIndex;
 
+    const workoutsList = week.workouts ?? [];
     // Primeiro, tentar encontrar pelo dayNumber exato na semana calculada
-    for (let i = 0; i < week.workouts.length; i++) {
-      const w = week.workouts[i];
+    for (let i = 0; i < workoutsList.length; i++) {
+      const w = workoutsList[i];
       if (w.day === expectedDayNumber) {
         workout = w;
         workoutIndex = i;
@@ -234,11 +240,12 @@ export const WorkoutView: React.FC = () => {
     }
 
     // Se não encontrou, procurar em todas as semanas pelo dayNumber
-    if (!workout) {
+    if (!workout && plan.weeks) {
       for (let wIdx = 0; wIdx < plan.weeks.length; wIdx++) {
         const currentWeek = plan.weeks[wIdx];
-        for (let i = 0; i < currentWeek.workouts.length; i++) {
-          const w = currentWeek.workouts[i];
+        const cwWorkouts = currentWeek?.workouts ?? [];
+        for (let i = 0; i < cwWorkouts.length; i++) {
+          const w = cwWorkouts[i];
           if (w.day === expectedDayNumber) {
             workout = w;
             workoutIndex = i;
@@ -253,8 +260,8 @@ export const WorkoutView: React.FC = () => {
     // Se ainda não encontrou pelo dayNumber exato, procurar pelo dia da semana
     // (útil se o plano tiver treinos repetidos na mesma semana)
     if (!workout) {
-      for (let i = 0; i < week.workouts.length; i++) {
-        const w = week.workouts[i];
+      for (let i = 0; i < workoutsList.length; i++) {
+        const w = workoutsList[i];
         // Converter dayNumber absoluto para dia da semana (1-7)
         const workoutWeekDay = ((w.day - 1) % 7) + 1;
         if (workoutWeekDay === planDayOfWeek) {
@@ -509,14 +516,14 @@ export const WorkoutView: React.FC = () => {
       };
     }
 
-    // 3º CHECK: Loading (se não houver plano ainda)
-    if (!plan) {
+    // 3º CHECK: Loading (plano carregando ou ainda vazio)
+    if (isLoading || !plan || !plan.weeks?.length) {
       return { type: 'loading' as const };
     }
 
     // 4º CHECK: Descanso (se houver plano mas não houver treino para este dia)
     return { type: 'rest' as const, status: dateStatus };
-  }, [historicalWorkout, workoutData, plan, dateStatus]);
+  }, [historicalWorkout, workoutData, plan, dateStatus, isLoading]);
 
   // Preparar exercícios para exibição com verificações de segurança
   const displayExercises = useMemo(() => {
@@ -684,10 +691,12 @@ export const WorkoutView: React.FC = () => {
       <div className="space-y-4">
         {contentToDisplay.type === 'loading' && (
           <Card>
-            <div className="p-8 text-center">
-              <div className="animate-pulse space-y-4">
-                <div className="h-4 bg-gray-700 rounded w-3/4 mx-auto"></div>
-                <div className="h-4 bg-gray-700 rounded w-1/2 mx-auto"></div>
+            <div className="p-8 text-center space-y-4">
+              <NeonSpinner size={48} />
+              <p className="text-alien-green font-medium">O E.T. Bilu está calculando sua evolução...</p>
+              <div className="animate-pulse space-y-2 opacity-50">
+                <div className="h-3 bg-gray-700 rounded w-3/4 mx-auto"></div>
+                <div className="h-3 bg-gray-700 rounded w-1/2 mx-auto"></div>
               </div>
               <p className="text-gray-400 mt-4">Carregando treino...</p>
             </div>

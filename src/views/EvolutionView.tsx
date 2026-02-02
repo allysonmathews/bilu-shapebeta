@@ -18,31 +18,20 @@ import {
   Ruler,
 } from 'lucide-react';
 import { mockExercises } from '../data/mockDatabase';
-import { getSplitConfig, type SplitType } from '../logic/workoutGenerator';
 
-// Labels em português para cada tipo de split
-const SPLIT_LABELS: Record<SplitType, string> = {
-  full_body: 'Corpo completo',
-  full_body_focus_a: 'Grandes grupos (Peito, Costas, Pernas)',
-  full_body_focus_b: 'Ombros, Braços e Pernas',
-  full_body_focus_c: 'Core e Pernas',
-  push: 'Push (Peito, Ombros, Tríceps)',
-  pull: 'Pull (Costas, Bíceps)',
-  legs: 'Pernas',
-  chest_triceps: 'Peito + Tríceps',
-  back_biceps: 'Costas + Bíceps',
-  shoulders_traps: 'Ombros + Trapézio',
-  legs_complete: 'Pernas Completa',
-  push_ppl: 'Push (Peito, Ombros, Tríceps)',
-  pull_ppl: 'Pull (Costas, Bíceps)',
-  legs_ppl: 'Pernas',
-  chest: 'Peito',
-  back: 'Costas',
-  shoulders_abs: 'Ombros + Abdômen',
-  arms: 'Braços',
-  upper: 'Superior',
-  lower: 'Inferior',
-};
+/** Descrição do split por número de dias (sem depender do workoutGenerator legado). Alinhado ao Split A-E e mock. */
+function getSplitDisplayLabels(daysPerWeek: number): string[] {
+  const map: Record<number, string[]> = {
+    1: ['Corpo completo'],
+    2: ['Corpo completo', 'Corpo completo'],
+    3: ['Push (Peito, Ombros, Tríceps)', 'Pull (Costas, Bíceps)', 'Pernas'],
+    4: ['Peito + Tríceps', 'Costas + Bíceps', 'Pernas', 'Ombros + Trapézio'],
+    5: ['Peito + Tríceps', 'Costas + Bíceps', 'Pernas (Quad)', 'Ombros + Trapézio', 'Pernas (Isquio) + Braços'],
+    6: ['Peito + Tríceps', 'Costas + Bíceps', 'Pernas', 'Peito + Ombros', 'Costas + Braços', 'Pernas'],
+    7: ['Peito', 'Costas', 'Pernas', 'Ombros', 'Braços', 'Peito + Costas', 'Pernas'],
+  };
+  return map[daysPerWeek] ?? map[5];
+}
 
 export const EvolutionView: React.FC = () => {
   const { progress, exerciseProgress, addProgressEntry, onboardingData, plan } = useUser();
@@ -241,14 +230,14 @@ export const EvolutionView: React.FC = () => {
 
   const strategy = getStrategyContent();
 
-  /** Dados para cards de Treino, Nutrição e Recuperação */
+  /** Dados para cards de Treino, Nutrição e Recuperação (sem lógica legada de workoutGenerator). */
   const strategyExtras = useMemo(() => {
     if (!onboardingData || !plan) return null;
     const prefs = onboardingData.preferences;
     const days = prefs.workoutDaysPerWeek ?? 5;
     const duration = prefs.workoutDuration ?? plan.weeks[0]?.workouts?.[0]?.duration ?? 90;
-    const { split } = getSplitConfig(days);
-    const uniqueLabels = [...new Set(split.map(s => SPLIT_LABELS[s] ?? s))];
+    const splitLabels = getSplitDisplayLabels(days);
+    const uniqueLabels = [...new Set(splitLabels)];
     const splitDescription =
       uniqueLabels.length <= 3 ? uniqueLabels.join(' · ') : `Foco em grandes grupos musculares (${uniqueLabels.length} dias)`;
 

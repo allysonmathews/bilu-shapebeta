@@ -48,8 +48,10 @@ export interface AICompletePlanPayload {
   gender?: Biometrics['gender'];
   /** Biotipo (ectomorph, mesomorph, endomorph) */
   biotype?: Biometrics['biotype'];
-  /** Refeições por dia */
+  /** Refeições por dia (apenas rotina: Café, Almoço, etc.). Pré e Pós-Treino são extras. */
   mealsPerDay?: number;
+  /** Total de refeições a gerar: mealsPerDay + 2 (rotina + Pré-Treino + Pós-Treino). */
+  total_meals_to_generate?: number;
   /** Horário de acordar (HH:mm) */
   wakeTime?: string;
   /** Horário preferido para treino (HH:mm) */
@@ -60,7 +62,7 @@ export interface AICompletePlanPayload {
   allergies?: string[];
   /** Lesões e restrições físicas */
   injuries?: Restrictions['injuries'];
-  /** Exige Pré-Treino (30–60 min antes) e Pós-Treino (logo após) nas refeições */
+  /** Exige Pré-Treino (60 min antes do treino) e Pós-Treino (30 min após workout_time); refeições principais = mealsPerDay, total = mealsPerDay + 2 */
   requirePrePostWorkout?: boolean;
 }
 
@@ -69,6 +71,7 @@ export interface AICompletePlanPayload {
  */
 export function onboardingToPayload(data: OnboardingData): AICompletePlanPayload {
   const { biometrics, restrictions, goals, preferences } = data;
+  const mealsPerDay = preferences.mealsPerDay ?? 4;
   return {
     weight: biometrics.weight,
     height: biometrics.height,
@@ -81,7 +84,8 @@ export function onboardingToPayload(data: OnboardingData): AICompletePlanPayload
     bodyFat: biometrics.bodyFat,
     gender: biometrics.gender,
     biotype: biometrics.biotype,
-    mealsPerDay: preferences.mealsPerDay,
+    mealsPerDay,
+    total_meals_to_generate: mealsPerDay + 2,
     wakeTime: preferences.wakeTime,
     workoutTime: preferences.workoutTime,
     sleepTime: preferences.sleepTime,
@@ -153,6 +157,7 @@ function toDietProfilePayload(payload: AICompletePlanPayload): Record<string, un
     mesomorph: 'mesomorfo',
     endomorph: 'endomorfo',
   };
+  const mealsPerDay = payload.mealsPerDay ?? 4;
   return {
     weight: payload.weight,
     height: payload.height,
@@ -162,9 +167,10 @@ function toDietProfilePayload(payload: AICompletePlanPayload): Record<string, un
     objective: objMap[payload.objective] ?? 'hipertrofia',
     workout_time: payload.workoutTime,
     workout_duration: payload.workoutDuration,
+    meals_per_day: mealsPerDay,
+    total_meals_to_generate: payload.total_meals_to_generate ?? mealsPerDay + 2,
     wake_up_time: payload.wakeTime,
     sleep_time: payload.sleepTime,
-    meals_per_day: payload.mealsPerDay,
     allergies: payload.allergies ?? [],
     require_pre_post_workout: true,
     pre_workout_minutes_before: 45,
@@ -474,46 +480,134 @@ function addMinutesToTime(time: string, deltaMinutes: number): string {
   return `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}`;
 }
 
-/** Dieta de failover: 5 refeições base + Pré-Treino (1h antes do workout_time) e Pós-Treino (logo após). */
+/** Converte "HH:mm" em minutos desde meia-noite. */
+function timeToMinutes(time: string): number {
+  const [h, m] = time.split(':').map(Number);
+  return h * 60 + m;
+}
+
+/** Converte minutos desde meia-noite em "HH:mm". */
+function minutesToTime(minutes: number): string {
+  const nh = (Math.floor(minutes / 60) + 24) % 24;
+  const nm = ((minutes % 60) + 60) % 60;
+  return `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}`;
+}
+
+/** Nomes das refeições principais (usar as N primeiras conforme meals_per_day). */
+const MAIN_MEAL_NAMES = ['Café da Manhã', 'Almoço', 'Lanche', 'Jantar', 'Ceia'] as const;
+
+/** Alimentos reais por tipo de refeição (4 principais + 2 treino). Estrutura padronizada: titulo, horario, alimentos[{ nome, quantidade }]. */
+const MOCK_ALIMENTOS: Record<string, Array<{ nome: string; quantidade: string; calorias?: number; proteina?: number; carboidratos?: number; gorduras?: number }>> = {
+  'Café da Manhã': [
+    { nome: 'Ovos mexidos', quantidade: '2 unidades', calorias: 180, proteina: 14, carboidratos: 2, gorduras: 14 },
+    { nome: 'Pão integral', quantidade: '2 fatias', calorias: 140, proteina: 6, carboidratos: 24, gorduras: 2 },
+    { nome: 'Banana', quantidade: '1 unidade', calorias: 105, proteina: 1, carboidratos: 27, gorduras: 0 },
+  ],
+  'Almoço': [
+    { nome: 'Frango grelhado', quantidade: '150g', calorias: 248, proteina: 46, carboidratos: 0, gorduras: 5 },
+    { nome: 'Arroz integral', quantidade: '1 concha', calorias: 170, proteina: 4, carboidratos: 37, gorduras: 1 },
+    { nome: 'Salada verde', quantidade: '1 porção', calorias: 40, proteina: 2, carboidratos: 6, gorduras: 0 },
+  ],
+  'Lanche': [
+    { nome: 'Iogurte natural', quantidade: '1 pote', calorias: 120, proteina: 10, carboidratos: 12, gorduras: 4 },
+    { nome: 'Granola', quantidade: '2 colheres', calorias: 100, proteina: 3, carboidratos: 18, gorduras: 3 },
+  ],
+  'Jantar': [
+    { nome: 'Peixe assado', quantidade: '120g', calorias: 140, proteina: 28, carboidratos: 0, gorduras: 3 },
+    { nome: 'Batata doce', quantidade: '1 unidade média', calorias: 130, proteina: 2, carboidratos: 30, gorduras: 0 },
+    { nome: 'Brócolis', quantidade: '1 xícara', calorias: 55, proteina: 4, carboidratos: 11, gorduras: 0 },
+  ],
+  'Ceia': [
+    { nome: 'Queijo cottage', quantidade: '100g', calorias: 98, proteina: 11, carboidratos: 4, gorduras: 4 },
+    { nome: 'Tomate', quantidade: '2 fatias', calorias: 10, proteina: 0, carboidratos: 2, gorduras: 0 },
+  ],
+  '🔥 Pré-Treino': [
+    { nome: 'Banana', quantidade: '1 unidade', calorias: 105, proteina: 1, carboidratos: 27, gorduras: 0 },
+    { nome: 'Tapioca', quantidade: '1 unidade', calorias: 140, proteina: 1, carboidratos: 35, gorduras: 0 },
+  ],
+  '⚡ Pós-Treino': [
+    { nome: 'Whey protein', quantidade: '1 dose', calorias: 120, proteina: 24, carboidratos: 3, gorduras: 2 },
+    { nome: 'Batata doce', quantidade: '1 unidade média', calorias: 130, proteina: 2, carboidratos: 30, gorduras: 0 },
+  ],
+};
+
+/**
+ * Dieta de failover: exatamente 4 refeições principais + 2 de treino (🔥 Pré-Treino, ⚡ Pós-Treino).
+ * Estrutura padronizada: refeicoes[].titulo, refeicoes[].horario, refeicoes[].alimentos[{ nome, quantidade }].
+ * Nomes reais (Frango, Arroz, Ovos, Banana, etc.), sem traços ou skeletons.
+ */
 function createFailoverDiet(payload: AICompletePlanPayload): DietApiResponse {
   const wakeTime = payload.wakeTime ?? '07:00';
   const workoutTime = payload.workoutTime ?? '18:00';
   const sleepTime = payload.sleepTime ?? '23:00';
-  const duration = payload.workoutDuration ?? 60;
+  const mainCount = Math.min(Math.max(1, payload.mealsPerDay ?? 4), MAIN_MEAL_NAMES.length);
   const preTime = addMinutesToTime(workoutTime, -60);
-  const postTime = addMinutesToTime(workoutTime, duration);
+  const postTime = addMinutesToTime(workoutTime, 30);
 
-  const baseRefeicoes: Array<{ horario: string; titulo_refeicao: string }> = [
-    { horario: wakeTime, titulo_refeicao: 'Café da Manhã' },
-    { horario: '12:00', titulo_refeicao: 'Almoço' },
-    { horario: '15:00', titulo_refeicao: 'Lanche' },
-    { horario: '20:00', titulo_refeicao: 'Jantar' },
-    { horario: sleepTime, titulo_refeicao: 'Ceia' },
-    { horario: preTime, titulo_refeicao: 'Pré-Treino' },
-    { horario: postTime, titulo_refeicao: 'Pós-Treino' },
+  const wakeMin = timeToMinutes(wakeTime);
+  const sleepMin = timeToMinutes(sleepTime);
+  const span = sleepMin > wakeMin ? sleepMin - wakeMin : 24 * 60 - wakeMin + sleepMin;
+  const mainSlots: Array<{ horario: string; titulo: string }> = [];
+  for (let i = 0; i < mainCount; i++) {
+    const offset = mainCount > 1 ? (span * i) / (mainCount - 1) : 0;
+    const min = wakeMin + Math.round(offset);
+    mainSlots.push({
+      horario: minutesToTime(min % (24 * 60)),
+      titulo: MAIN_MEAL_NAMES[i],
+    });
+  }
+
+  const prePost: Array<{ horario: string; titulo: string }> = [
+    { horario: preTime, titulo: '🔥 Pré-Treino' },
+    { horario: postTime, titulo: '⚡ Pós-Treino' },
   ];
-  const refeicoes = baseRefeicoes.map((r) => ({
-    horario: r.horario,
-    titulo_refeicao: r.titulo_refeicao,
-    lista_alimentos_com_quantidade: [
-      { alimento: 'Exemplo (personalize com a API)', quantidade: '1 porção', calorias: 200, proteina: 10, carboidratos: 20, gorduras: 8 },
-    ],
-    macros_da_ref: { calorias: 200, proteina: 10, carboidratos: 20, gorduras: 8 },
-  }));
+
+  const allSlots = [...mainSlots, ...prePost].sort(
+    (a, b) => timeToMinutes(a.horario) - timeToMinutes(b.horario)
+  );
 
   const tdee = 2000;
-  const meta = { calorias: 1800, proteina: 120, carboidratos: 180, gorduras: 60 };
+  const metaCal = 1800;
+  const refeicoes = allSlots.map((r) => {
+    const alimentos = MOCK_ALIMENTOS[r.titulo] ?? MOCK_ALIMENTOS['Café da Manhã'];
+    const totalCal = alimentos.reduce((s, a) => s + (a.calorias ?? 0), 0);
+    const totalP = alimentos.reduce((s, a) => s + (a.proteina ?? 0), 0);
+    const totalC = alimentos.reduce((s, a) => s + (a.carboidratos ?? 0), 0);
+    const totalG = alimentos.reduce((s, a) => s + (a.gorduras ?? 0), 0);
+    return {
+      titulo: r.titulo,
+      horario: r.horario,
+      alimentos,
+      macros_da_ref: { calorias: totalCal, proteina: totalP, carboidratos: totalC, gorduras: totalG },
+    };
+  });
+
+  const lista_compras = [
+    { item: 'Frango', quantidade: '1 kg' },
+    { item: 'Arroz integral', quantidade: '1 kg' },
+    { item: 'Ovos', quantidade: '12 unidades' },
+    { item: 'Banana', quantidade: '1 dúzia' },
+    { item: 'Batata doce', quantidade: '500g' },
+    { item: 'Whey protein', quantidade: '1 pote' },
+  ];
+
   return {
     resumo_metabolico: {
       tdee,
-      meta_calorias: meta.calorias,
-      meta_proteina: meta.proteina,
-      meta_carboidratos: meta.carboidratos,
-      meta_gorduras: meta.gorduras,
+      meta_calorias: metaCal,
+      meta_proteina: 120,
+      meta_carboidratos: 180,
+      meta_gorduras: 60,
     },
     refeicoes,
-    lista_compras: [{ item: 'Lista gerada pela API quando disponível', quantidade: '-' }],
+    lista_compras,
   };
+}
+
+/** Número obrigatório de refeições: apenas rotina (meals_per_day) + 2 extras (Pré e Pós-Treino). */
+function getRequiredMealsCount(profile: AICompletePlanPayload): number {
+  const main = Math.max(1, profile.mealsPerDay ?? 4);
+  return main + 2;
 }
 
 /** Indica se estamos usando o fallback para a API antiga (/api/diet). */
@@ -522,9 +616,8 @@ const isDietFallback =
 
 /**
  * Busca o plano completo (dieta + treino) da API unificada.
- * Envia o perfil completo do usuário e retorna ambos os planos.
- * Em caso de falha da API, retorna plano mock (dieta + treino) para o usuário
- * ver volume real, divisão A-E e refeições com Pré/Pós-Treino.
+ * Em caso de falha ou resposta inválida, usa APENAS o mock (100 min, Split A-E, dieta meals+2).
+ * Valida que a dieta tenha exatamente REQUIRED_MEALS refeições; se vier menos, usa mock.
  *
  * @param profile - Perfil completo (AICompletePlanPayload ou OnboardingData)
  * @param accessToken - Token de autenticação (opcional)
@@ -538,6 +631,8 @@ export async function fetchCompletePlanFromApi(
 > {
   const payload: AICompletePlanPayload =
     'biometrics' in profile ? onboardingToPayload(profile) : profile;
+
+  const REQUIRED_MEALS = getRequiredMealsCount(payload);
 
   const returnFailoverPlan = (): { ok: true; diet: DietApiResponse; workout_plan: AIPlannerWeek[] } => ({
     ok: true,
@@ -591,6 +686,10 @@ export async function fetchCompletePlanFromApi(
     }
 
     const diet = response.diet as DietApiResponse;
+    if (diet.refeicoes.length < REQUIRED_MEALS) {
+      return returnFailoverPlan();
+    }
+
     const hasWorkoutPlan =
       Array.isArray(response.workout_plan) && response.workout_plan.length > 0;
 
