@@ -268,8 +268,8 @@ export const DailyJournal: React.FC = () => {
   const todayDateString = getTodayDateString();
   const todayCompletedMeals = completedMeals[todayDateString] || new Set<string>();
 
-  const toggleMeal = (mealId: string) => {
-    toggleMealCompletion(todayDateString, mealId);
+  const toggleMeal = (mealId: string, mealTime: string) => {
+    toggleMealCompletion(todayDateString, mealId, mealTime);
   };
 
   const toggleWorkout = () => {
@@ -707,7 +707,7 @@ export const DailyJournal: React.FC = () => {
               return (
                 <Card
                   key={meal.id}
-                  onClick={() => toggleMeal(meal.id)}
+                  onClick={() => toggleMeal(meal.id, meal.time)}
                   className={`cursor-pointer transition-all ${isCompleted ? 'border-alien-green opacity-75' : 'hover:border-gray-600'}`}
                 >
                   <div className="flex items-start justify-between">

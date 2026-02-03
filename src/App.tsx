@@ -10,6 +10,7 @@ import { DietView } from './views/DietView';
 import { EvolutionView } from './views/EvolutionView';
 import { ProfileView } from './views/ProfileView';
 import { Navigation } from './components/Navigation';
+import { AppHeader } from './components/AppHeader';
 import { PullToRefresh } from './components/PullToRefresh';
 import { NeonSpinner } from './components/ui/NeonSpinner';
 import type { OnboardingData } from './types';
@@ -44,6 +45,7 @@ function buildOnboardingDataFromProfile(profile: ProfileRow): OnboardingData {
 const AppContent: React.FC = () => {
   const {
     user,
+    userId,
     authLoading,
     profileCheckLoading,
     profileCheckResult,
@@ -195,6 +197,8 @@ const AppContent: React.FC = () => {
 
   return (
     <div className="max-w-md mx-auto h-screen overflow-hidden border-x border-gray-800 relative bg-deep-bg">
+      {userId && <AppHeader userId={userId} />}
+      <div className={userId ? 'pt-12 h-full' : 'h-full'}>
       {usePullToRefresh ? (
         <PullToRefresh onRefresh={handleRefresh} className="h-full pb-16">
           {renderCurrentView()}
@@ -204,6 +208,7 @@ const AppContent: React.FC = () => {
           {renderCurrentView()}
         </div>
       )}
+      </div>
       <Navigation currentTab={currentTab} onTabChange={setCurrentTab} />
     </div>
   );

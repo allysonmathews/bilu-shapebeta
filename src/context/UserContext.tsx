@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
 import { User, OnboardingData, FourWeekPlan, ProgressEntry, ExerciseProgress } from '../types';
-import { supabase, getProfileByUserId, getPreCadastroProfile, type ProfileRow, type PreCadastroProfileRow } from '../lib/supabase';
+import { supabase, getProfileByUserId, getPreCadastroProfile, upsertCompletedMeal, removeCompletedMeal, type ProfileRow, type PreCadastroProfileRow } from '../lib/supabase';
 
 // localStorage: bilu_user, bilu_onboarding, bilu_plan, bilu_progress, bilu_exercise_progress, bilu_completed_meals
 // Estrutura para rastrear refeições completadas por data
@@ -10,6 +10,8 @@ interface CompletedMeals {
 
 interface UserContextType {
   user: User;
+  /** ID do usuário logado (auth.users.id); null se não logado. */
+  userId: string | null;
   authLoading: boolean;
   /** Enquanto true, está verificando na tabela profiles se o usuário já tem perfil (evitar repetir onboarding). */
   profileCheckLoading: boolean;
@@ -26,7 +28,7 @@ interface UserContextType {
   setPlan: (plan: FourWeekPlan) => void;
   addProgressEntry: (entry: ProgressEntry) => void;
   updateExerciseProgress: (exerciseId: string, exerciseName: string, date: string, sets: number, reps: number, weight: number) => void;
-  toggleMealCompletion: (date: string, mealId: string) => void;
+  toggleMealCompletion: (date: string, mealId: string, mealTime?: string) => void;
   /** Recarrega o perfil do Supabase (ex.: após pre-cadastro via chat). Se onReady for passado, será chamado com os dados para que o plano seja gerado fora. */
   refreshProfileFromSupabase: (onReady?: (data: OnboardingData) => void) => Promise<void>;
   logout: () => void;
@@ -50,6 +52,8 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [profileCheckLoading, setProfileCheckLoading] = useState(false);
   const [profileCheckResult, setProfileCheckResult] = useState<ProfileRow | null | undefined>(undefined);
   const profileCheckDoneRef = useRef(false);
+
+  const [userId, setUserId] = useState<string | null>(null);
 
   const [user, setUserState] = useState<User>(() => {
     const stored = localStorage.getItem('bilu_user');
@@ -187,7 +191,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     });
   }, []);
 
-  const toggleMealCompletion = useCallback((date: string, mealId: string) => {
+  const toggleMealCompletion = useCallback((date: string, mealId: string, mealTime?: string) => {
     setCompletedMeals(prev => {
       const newCompleted = { ...prev };
       if (!newCompleted[date]) {
@@ -195,14 +199,24 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } else {
         newCompleted[date] = new Set(newCompleted[date]);
       }
+      const willBeCompleted = !newCompleted[date].has(mealId);
       if (newCompleted[date].has(mealId)) {
         newCompleted[date].delete(mealId);
       } else {
         newCompleted[date].add(mealId);
       }
+
+      // Sincroniza com Supabase (completed_meals) para o worker de notificações
+      if (mealTime && userId) {
+        if (willBeCompleted) {
+          upsertCompletedMeal(userId, date, mealTime, mealId).catch(() => {});
+        } else {
+          removeCompletedMeal(userId, date, mealTime).catch(() => {});
+        }
+      }
       return newCompleted;
     });
-  }, []);
+  }, [userId]);
 
   const clearProfileCheckResult = useCallback(() => {
     setProfileCheckResult(undefined);
@@ -316,6 +330,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const clearUserData = useCallback(() => {
+    setUserId(null);
     setUserState({ isAuthenticated: false, onboardingCompleted: false });
     setOnboardingDataState(null);
     setPlanState(null);
@@ -341,8 +356,10 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       const { data: { session } } = await supabase.auth.getSession();
       if (!mounted) return;
       if (session) {
+        setUserId(session.user.id);
         setUserState((prev) => ({ ...prev, isAuthenticated: true }));
       } else {
+        setUserId(null);
         setUserState((prev) => ({ ...prev, isAuthenticated: false }));
       }
       setAuthLoading(false);
@@ -353,8 +370,10 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
       if (session) {
+        setUserId(session.user.id);
         setUserState((prev) => ({ ...prev, isAuthenticated: true }));
       } else {
+        setUserId(null);
         clearUserData();
       }
     });
@@ -400,6 +419,7 @@ export const UserProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     <UserContext.Provider
       value={{
         user,
+        userId,
         authLoading,
         profileCheckLoading,
         profileCheckResult,
