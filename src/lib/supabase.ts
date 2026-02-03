@@ -1,7 +1,11 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = 'https://ukykvrqnwmvwhfjhsamy.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_fUN44y_IwArfw7L3wk3h3g_snErBzrY';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  console.warn('[Supabase] VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY devem estar definidos no .env');
+}
 
 /** Cliente Supabase (anon key para uso no frontend). */
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
