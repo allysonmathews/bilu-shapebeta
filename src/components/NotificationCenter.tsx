@@ -41,6 +41,7 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({ userId }
   const [loading, setLoading] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const fetchRef = useRef<(() => void) | null>(null);
 
   const hasUnread = notifications.some((n) => !n.is_read);
 
@@ -52,55 +53,107 @@ export const NotificationCenter: React.FC<NotificationCenterProps> = ({ userId }
     setLoading(false);
   }, [userId]);
 
-  // Carregamento inicial
+  fetchRef.current = fetchNotifications;
+
+  // Carregamento inicial (apenas userId)
   useEffect(() => {
     if (!userId) return;
     fetchNotifications();
   }, [userId, fetchNotifications]);
 
-  // Supabase Realtime: escuta INSERT, UPDATE e DELETE na tabela notifications filtrado por user_id
+  // Supabase Realtime: um único efeito com dependência APENAS em userId.
+  // Cleanup só roda ao trocar userId ou desmontar; evita loop de reconexão.
   useEffect(() => {
     if (!userId) return;
 
+    // Evita duplicar canal: se já existe assinatura ativa, não cria outra
+    if (channelRef.current) {
+      return;
+    }
+
+    const channelName = `notifications:${userId}`;
     const channel = supabase
-      .channel(`notifications:${userId}`)
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
-          event: '*',
+          event: 'INSERT',
           schema: 'public',
           table: 'notifications',
           filter: `user_id=eq.${userId}`,
         },
         (payload) => {
-          if (payload.eventType === 'INSERT' && payload.new) {
-            const row = toNotificationRow(payload.new as Record<string, unknown>);
-            setNotifications((prev) => [row, ...prev]);
-          } else if (payload.eventType === 'UPDATE' && payload.new) {
-            const row = toNotificationRow(payload.new as Record<string, unknown>);
-            setNotifications((prev) =>
-              prev.map((n) => (n.id === row.id ? row : n))
-            );
-          } else if (payload.eventType === 'DELETE' && payload.old) {
-            const id = String((payload.old as Record<string, unknown>).id ?? '');
-            if (id) {
-              setNotifications((prev) => prev.filter((n) => n.id !== id));
-            }
+          const record = payload.new ?? (payload as { record?: Record<string, unknown> }).record;
+          if (!record) return;
+          const row = toNotificationRow(record as Record<string, unknown>);
+          setNotifications((prev) =>
+            prev.some((n) => n.id === row.id) ? prev : [row, ...prev]
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const record = payload.new ?? (payload as { record?: Record<string, unknown> }).record;
+          if (!record) return;
+          const row = toNotificationRow(record as Record<string, unknown>);
+          setNotifications((prev) =>
+            prev.map((n) => (n.id === row.id ? row : n))
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const oldRecord = payload.old ?? (payload as { old_record?: Record<string, unknown> }).old_record;
+          const id = oldRecord ? String((oldRecord as Record<string, unknown>).id ?? '') : '';
+          if (id) {
+            setNotifications((prev) => prev.filter((n) => n.id !== id));
           }
         }
       )
       .subscribe((status) => {
-        if (status === 'CHANNEL_ERROR') {
-          console.warn('[NotificationCenter] Realtime channel error');
+        if (status === 'SUBSCRIBED') {
+          fetchRef.current?.();
+        }
+        if (status === 'CHANNEL_ERROR' || status === 'CLOSED' || status === 'TIMED_OUT') {
+          console.warn('[NotificationCenter] Realtime', status, '- atualizando lista em 2s (sem recriar canal)');
+          window.setTimeout(() => fetchRef.current?.(), 2000);
         }
       });
 
     channelRef.current = channel;
 
+    // Cleanup apenas ao desmontar ou quando userId mudar (não em updates simples)
     return () => {
-      supabase.removeChannel(channel);
-      channelRef.current = null;
+      const ch = channelRef.current;
+      if (ch) {
+        try {
+          ch.unsubscribe();
+        } catch (_) {}
+        supabase.removeChannel(ch);
+        channelRef.current = null;
+      }
     };
+  }, [userId]);
+
+  // Force update: evento do Test Clock/API atualiza só o estado local (fetch), não recarrega página
+  useEffect(() => {
+    const onUpdated = () => fetchRef.current?.();
+    window.addEventListener('bilu:notifications-updated', onUpdated);
+    return () => window.removeEventListener('bilu:notifications-updated', onUpdated);
   }, [userId]);
 
   // Fechar popover ao clicar fora

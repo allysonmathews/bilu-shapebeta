@@ -106,6 +106,7 @@ Deno.serve(async (req: Request) => {
     }
 
     const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+    // TODO: REMOVE-TEST - Em produção, usar new Date() diretamente
     const now = new Date();
     const today = toDateStr(now);
     const currentHHmm = formatHHmm(now);
