@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import type { SupportedStorage } from '@supabase/supabase-js';
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -7,8 +8,62 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.warn('[Supabase] VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY devem estar definidos no .env');
 }
 
-/** Cliente Supabase (anon key para uso no frontend). */
-export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+/** Opções do cookie de autenticação (compartilhado entre subdomínios de bilushape.com). */
+const cookieOptions = {
+  domain: '.bilushape.com',
+  path: '/',
+  maxAge: 60 * 60 * 24 * 7, // 7 dias
+  sameSite: 'lax' as const,
+  secure: true,
+};
+
+function createCookieStorage(opts: typeof cookieOptions): SupportedStorage {
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return {
+    getItem: (key: string) => {
+      if (typeof document === 'undefined') return null;
+      const match = document.cookie.match(new RegExp('(?:^|; )' + escape(key) + '=([^;]*)'));
+      return Promise.resolve(match ? decodeURIComponent(match[1]) : null);
+    },
+    setItem: (key: string, value: string) => {
+      if (typeof document === 'undefined') return Promise.resolve();
+      const parts = [
+        `${key}=${encodeURIComponent(value)}`,
+        `path=${opts.path}`,
+        `domain=${opts.domain}`,
+        `max-age=${opts.maxAge}`,
+        `SameSite=${opts.sameSite}`,
+      ];
+      if (opts.secure) parts.push('Secure');
+      document.cookie = parts.join('; ');
+      return Promise.resolve();
+    },
+    removeItem: (key: string) => {
+      if (typeof document === 'undefined') return Promise.resolve();
+      document.cookie = [
+        `${key}=`,
+        `path=${opts.path}`,
+        `domain=${opts.domain}`,
+        'max-age=0',
+      ].join('; ');
+      return Promise.resolve();
+    },
+  };
+}
+
+const isBilushapeDomain =
+  typeof window !== 'undefined' && /\.?bilushape\.com$/i.test(window.location.hostname);
+
+/** Cliente Supabase (anon key para uso no frontend). Em bilushape.com usa cookies com domain .bilushape.com para sessão em todos os subdomínios. */
+export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    storage: isBilushapeDomain ? createCookieStorage(cookieOptions) : undefined,
+    storageKey: `sb-${new URL(SUPABASE_URL).hostname.split('.')[0]}-auth-token`,
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  },
+});
 
 /** Dados do perfil para enviar ao Supabase (Nome, E-mail, Biotipo, Objetivo, Calorias). */
 export interface ProfilePayload {
