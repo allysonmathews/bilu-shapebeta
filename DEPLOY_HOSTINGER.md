@@ -9,7 +9,7 @@ No painel da Hostinger, configure as seguintes variáveis de ambiente para o **s
 #### Variáveis Obrigatórias:
 
 1. **GROQ_API_KEY**
-   - Valor: `SUA_CHAVE_AQUI` (obtenha em https://console.groq.com)
+   - Valor: obtenha em https://console.groq.com (nunca commite no repositório)
    - Descrição: Chave da API Groq para integração com IA
 
 2. **GROQ_MODEL** (opcional, mas recomendado)
@@ -21,7 +21,7 @@ No painel da Hostinger, configure as seguintes variáveis de ambiente para o **s
    - Descrição: URL do projeto Supabase
 
 4. **SUPABASE_SERVICE_ROLE_KEY**
-   - Valor: `SUA_SERVICE_ROLE_KEY_AQUI` (em Supabase: Settings → API)
+   - Valor: em Supabase → Settings → API (nunca commite no repositório)
    - Descrição: Service Role Key do Supabase (mantenha segredo!)
 
 ### 🌐 Variáveis para o Frontend (Vite)
@@ -63,10 +63,10 @@ Se a Hostinger permitir upload de arquivo `.env`:
 
 1. Crie um arquivo `.env` na raiz do projeto do servidor com:
 ```env
-GROQ_API_KEY=SUA_CHAVE_AQUI
+GROQ_API_KEY=SUA_CHAVE_GROQ_AQUI
 GROQ_MODEL=llama-3.3-70b-versatile
 SUPABASE_URL=https://seu-projeto.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=SUA_SERVICE_ROLE_KEY_AQUI
+SUPABASE_SERVICE_ROLE_KEY=<sua-service-role-key>
 ```
 
 2. Faça upload via FTP/SSH para a pasta do servidor
@@ -124,12 +124,31 @@ npm run build
 # Gera arquivos em /.next
 ```
 
-### 3. Upload para Hostinger
+### 3. Iniciar Frontend + Backend na mesma porta (recomendado)
+
+O arquivo `server/index.js` serve a API Next.js e os arquivos estáticos do Vite na **mesma porta**. Assim a Hostinger precisa de um único processo Node.
+
+**Na raiz do projeto:**
+```bash
+npm run build          # gera a pasta dist/ (frontend)
+npm run build:server   # gera server/.next (backend)
+npm run start          # inicia node server/index.js (frontend + API na porta 3001)
+```
+
+**Com PM2:**
+```bash
+npm run build && npm run build:server
+pm2 start ecosystem.config.cjs
+```
+
+Ajuste `ecosystem.config.cjs` para usar `node index.js` no diretório `server` se quiser o servidor unificado. O servidor web (Nginx/Apache) deve fazer proxy para `http://localhost:3001`.
+
+### 4. Upload para Hostinger
 
 - **Frontend**: Faça upload da pasta `dist/` para a raiz do domínio
-- **Backend**: Faça upload da pasta `server/` e execute `npm start` ou configure PM2
+- **Backend**: Faça upload da pasta `server/` (com `.next` após o build) e use `npm run start` ou PM2
 
-### 4. Configurar Servidor Web
+### 5. Configurar Servidor Web
 
 Se usar Nginx ou Apache, configure:
 

@@ -16,7 +16,7 @@ cp .env.example .env.local
 | Variável        | Descrição                          |
 |----------------|------------------------------------|
 | `OPENAI_API_KEY` | Chave OpenAI (sk-...)             |
-| `GROQ_API_KEY`   | Chave Groq (gsk_...) - alternativa |
+| `GROQ_API_KEY`   | Chave Groq (SUA_CHAVE_GROQ_AQUI) - alternativa |
 | `BiluShapeIA`    | Mesmo que GROQ_API_KEY             |
 | `SUPABASE_URL`   | URL do projeto Supabase            |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service Role Key (para salvar perfil via Function Calling) |

@@ -10,9 +10,8 @@ export interface ChatMessage {
 const INITIAL_AI_MESSAGE =
   'Fala! Bem-vindo ao Bilu Shape. Sou sua IA pessoal. Antes de montarmos seu plano, me conta: qual é o seu nome e qual o seu maior objetivo hoje?';
 
-const CHAT_API_URL =
-  (import.meta.env.VITE_CHAT_API_URL as string | undefined) ??
-  '/api/chat/onboarding';
+// Caminho relativo: funciona em produção (biluverso.com.br) e em dev (proxy Vite)
+const CHAT_API_URL = '/api/chat/onboarding';
 
 export const OnboardingChat: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -33,7 +32,7 @@ export const OnboardingChat: React.FC = () => {
   }, [messages, scrollToBottom]);
 
   const handleSend = async () => {
-    console.log('CHAMANDO API...', CHAT_API_URL);
+    console.log('Tentando conectar em:', CHAT_API_URL);
     const text = inputValue.trim();
     if (!text || isLoading) return;
 

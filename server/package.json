@@ -5,10 +5,12 @@
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build",
-    "start": "next start -p 3001"
+    "start": "next start -p 3001",
+    "start:unified": "node index.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.47.10",
+    "express": "^4.18.2",
     "next": "^14.2.0",
     "openai": "^4.52.0",
     "react": "^18.2.0",
