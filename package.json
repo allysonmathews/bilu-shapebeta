@@ -4,8 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "bilu": "concurrently -n \"Frontend (Vite),Backend (Server)\" \"npm run dev\" \"cd server && npm run dev\"",
-    "dev": "vite",
+    "bilu": "concurrently -n \"Frontend (Vite),Backend (Server)\" \"npm run dev:clean\" \"cd server && npm run dev\"",
+    "dev": "vite --force",
+    "dev:clean": "powershell -Command \"if (Test-Path node_modules/.vite) { Remove-Item -Recurse -Force node_modules/.vite }\" && vite --force",
     "build": "vite build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",

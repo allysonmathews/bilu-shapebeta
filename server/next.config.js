@@ -13,6 +13,14 @@ const nextConfig = {
       },
     ];
   },
+  // Configuração para produção
+  output: 'standalone', // Otimiza o build para produção
+  // Se o frontend estiver sendo servido pelo mesmo servidor Next.js, descomente:
+  // trailingSlash: true,
+  // Se precisar servir arquivos estáticos do frontend, configure:
+  // publicRuntimeConfig: {
+  //   staticFolder: '/dist',
+  // },
 };
 
 module.exports = nextConfig;

@@ -12,8 +12,18 @@ export interface ChatMessage {
 const INITIAL_AI_MESSAGE =
   'Olá! Sou o Bilu Shape AI. Para montar seu plano de treino e dieta, preciso te conhecer melhor. Qual seu nome?';
 
+// URL da API: usa variável de ambiente ou fallback para URL relativa (produção)
+// Em produção, usa URL relativa para funcionar em qualquer domínio
+// Em desenvolvimento, pode usar URL absoluta via VITE_CHAT_API_URL
 const CHAT_API_URL =
-  (import.meta.env.VITE_CHAT_API_URL as string | undefined) ?? '/api/chat/onboarding';
+  import.meta.env.VITE_CHAT_API_URL || '/api/chat/onboarding';
+
+// Log apenas em desenvolvimento
+if (import.meta.env.DEV && !import.meta.env.VITE_CHAT_API_URL) {
+  console.warn(
+    '[PreCadastroChat] VITE_CHAT_API_URL não está configurada. Usando URL relativa: /api/chat/onboarding'
+  );
+}
 
 /** Frases que indicam que o perfil foi salvo com sucesso (IA confirma conclusão). */
 const PROFILE_COMPLETE_PHRASES = [
@@ -89,12 +99,11 @@ export const PreCadastroChat: React.FC = () => {
         { role: 'user' as const, content: text },
       ];
 
-      if (CHAT_API_URL) {
-        // Nova API Next.js com streaming
-        const { data: { session } } = await supabase.auth.getSession();
-        const token = session?.access_token;
+      // Nova API Next.js com streaming
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
 
-        const res = await fetch(CHAT_API_URL, {
+      const res = await fetch(CHAT_API_URL, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
