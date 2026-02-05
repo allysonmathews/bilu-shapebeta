@@ -10,8 +10,8 @@ export interface ChatMessage {
 const INITIAL_AI_MESSAGE =
   'Fala! Bem-vindo ao Bilu Shape. Sou sua IA pessoal. Antes de montarmos seu plano, me conta: qual é o seu nome e qual o seu maior objetivo hoje?';
 
-// Subdomínio app.bilushape.com: usar sempre caminho relativo (sem absoluto nem localhost)
-const API_URL = '/api/chat/onboarding';
+// Contorno 503 Hostinger: conexão direta ao backend na porta 3001
+const API_URL = 'http://46.202.145.27:3001/api/chat/onboarding';
 
 export const OnboardingChat: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([

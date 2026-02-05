@@ -12,8 +12,8 @@ export interface ChatMessage {
 const INITIAL_AI_MESSAGE =
   'Olá! Sou o Bilu Shape AI. Para montar seu plano de treino e dieta, preciso te conhecer melhor. Qual seu nome?';
 
-// Subdomínio app.bilushape.com: usar sempre caminho relativo (sem absoluto nem localhost)
-const API_URL = '/api/chat/onboarding';
+// Contorno 503 Hostinger: conexão direta ao backend na porta 3001
+const API_URL = 'http://46.202.145.27:3001/api/chat/onboarding';
 
 /** Frases que indicam que o perfil foi salvo com sucesso (IA confirma conclusão). */
 const PROFILE_COMPLETE_PHRASES = [

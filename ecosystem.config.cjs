@@ -8,7 +8,7 @@ module.exports = {
     {
       name: 'bilu-shape',
       cwd: './server',
-      script: 'index.js',
+      script: '',
       interpreter: 'node',
       instances: 1,
       autorestart: true,
