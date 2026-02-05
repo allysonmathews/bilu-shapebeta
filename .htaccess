@@ -1,0 +1,21 @@
+# Bilu Shape - app.bilushape.com (Hostinger)
+# Redireciona chamadas /api/* para o servidor Node na porta 3001.
+# Requer: mod_rewrite e mod_proxy ativados (em hospedagem compartilhada,
+# se [P] não funcionar, solicite ativação do proxy ao suporte).
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Encaminhar /api/* para o processo Node (porta 3001) — proxy reverso
+  RewriteCond %{REQUEST_URI} ^/api/
+  RewriteRule ^api/(.*)$ http://127.0.0.1:3001/api/$1 [P,L]
+</IfModule>
+
+# Fallback para SPA: se o arquivo/diretório não existir, servir index.html
+<IfModule mod_rewrite.c>
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_URI} !^/api/
+  RewriteRule ^ index.html [L]
+</IfModule>

@@ -10,8 +10,8 @@ export interface ChatMessage {
 const INITIAL_AI_MESSAGE =
   'Fala! Bem-vindo ao Bilu Shape. Sou sua IA pessoal. Antes de montarmos seu plano, me conta: qual é o seu nome e qual o seu maior objetivo hoje?';
 
-// Caminho relativo: funciona em produção (biluverso.com.br) e em dev (proxy Vite)
-const CHAT_API_URL = '/api/chat/onboarding';
+// Subdomínio app.bilushape.com: usar sempre caminho relativo (sem absoluto nem localhost)
+const API_URL = '/api/chat/onboarding';
 
 export const OnboardingChat: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -32,7 +32,7 @@ export const OnboardingChat: React.FC = () => {
   }, [messages, scrollToBottom]);
 
   const handleSend = async () => {
-    console.log('Tentando conectar em:', CHAT_API_URL);
+    console.log('Tentando conectar em:', API_URL);
     const text = inputValue.trim();
     if (!text || isLoading) return;
 
@@ -51,7 +51,7 @@ export const OnboardingChat: React.FC = () => {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      const res = await fetch(CHAT_API_URL, {
+      const res = await fetch(API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -12,7 +12,7 @@ export interface ChatMessage {
 const INITIAL_AI_MESSAGE =
   'Olá! Sou o Bilu Shape AI. Para montar seu plano de treino e dieta, preciso te conhecer melhor. Qual seu nome?';
 
-// Caminho relativo: o navegador usa o domínio atual (ex.: biluverso.com.br em produção, localhost em dev com proxy)
+// Subdomínio app.bilushape.com: usar sempre caminho relativo (sem absoluto nem localhost)
 const API_URL = '/api/chat/onboarding';
 
 /** Frases que indicam que o perfil foi salvo com sucesso (IA confirma conclusão). */

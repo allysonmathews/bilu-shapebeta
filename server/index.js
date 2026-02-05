@@ -3,6 +3,7 @@
  * - Express escuta em process.env.PORT || 3001.
  * - API (/api) é tratada pelo Next.js (server/app/api).
  * - Frontend: arquivos estáticos da pasta dist (build do Vite) + catch-all com index.html.
+ * - CORS: configurado em next.config.js para aceitar apenas https://app.bilushape.com.
  *
  * Variáveis de ambiente: em produção use APENAS as variáveis definidas no painel
  * do host (ex.: GROQ_API_KEY). Não dependa de arquivos .env no servidor.
