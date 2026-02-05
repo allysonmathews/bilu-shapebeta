@@ -1,9 +1,11 @@
 /**
- * Servidor unificado para a Hostinger: serve a API Next.js (/api) e os arquivos
- * estáticos do frontend Vite (pasta dist). Assim frontend e backend rodam na mesma porta.
+ * Servidor unificado para Node.js Deployment (ex.: Hostinger).
+ * - Express escuta em process.env.PORT || 3001.
+ * - API (/api) é tratada pelo Next.js (server/app/api).
+ * - Frontend: arquivos estáticos da pasta dist (build do Vite) + catch-all com index.html.
  *
- * Uso: na pasta server, após "npm run build", execute "node index.js"
- * Ou na raiz: "npm run build:server" e "npm run start" (ajuste start para node server/index.js)
+ * Variáveis de ambiente: em produção use APENAS as variáveis definidas no painel
+ * do host (ex.: GROQ_API_KEY). Não dependa de arquivos .env no servidor.
  */
 const path = require('path');
 const next = require('next');
@@ -19,22 +21,22 @@ const distPath = path.join(__dirname, '..', 'dist');
 app.prepare().then(() => {
   const server = express();
 
-  // 1) Rotas da API: repassadas ao Next.js (path completo preservado)
+  // 1) API: repassada ao Next.js (path completo preservado)
   server.use((req, res, next) => {
     if (req.path.startsWith('/api')) return handle(req, res);
     next();
   });
 
-  // 2) Arquivos estáticos do frontend (Vite build)
+  // 2) Arquivos estáticos do frontend (Vite → dist)
   server.use(express.static(distPath));
 
-  // 3) Catch-all: SPA retorna index.html para rotas do frontend
+  // 3) Catch-all: SPA — qualquer rota não-API recebe index.html (evita 404 no refresh)
   server.get('*', (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
   });
 
   server.listen(port, (err) => {
     if (err) throw err;
-    console.log(`> Bilu Shape: frontend (dist) + API (/api) em http://localhost:${port}`);
+    console.log(`> Bilu Shape: frontend (dist) + API (/api) na porta ${port}`);
   });
 });
