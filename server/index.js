@@ -12,7 +12,11 @@ const cors = require('cors');
 const Groq = require('groq-sdk');
 
 const PORT = 3001;
-const ALLOWED_ORIGIN = 'https://app.bilushape.com';
+// Origens permitidas: use ALLOWED_ORIGINS no .env (separadas por vírgula) ou o valor padrão
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'https://app.bilushape.com,http://localhost:5173,http://127.0.0.1:5173')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 const app = express();
 
@@ -21,7 +25,7 @@ app.use(express.json({ limit: '512kb' }));
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || origin === ALLOWED_ORIGIN) {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) {
         callback(null, true);
       } else {
         console.log('[CORS] Origem rejeitada:', origin);

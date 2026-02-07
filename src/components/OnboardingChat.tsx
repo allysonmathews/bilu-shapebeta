@@ -10,8 +10,8 @@ export interface ChatMessage {
 const INITIAL_AI_MESSAGE =
   'Fala! Bem-vindo ao Bilu Shape. Sou sua IA pessoal. Antes de montarmos seu plano, me conta: qual é o seu nome e qual o seu maior objetivo hoje?';
 
-// Contorno 503 Hostinger: conexão direta ao backend na porta 3001
-const API_URL = '/api/chat/onboarding';
+// URL da API de chat (IA-BILUMIND na VPS); fallback para proxy local em dev
+const API_URL = (import.meta.env.VITE_CHAT_API_URL as string) || '/api/chat/onboarding';
 
 export const OnboardingChat: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([

@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: 'http://76.13.235.137:3001',
         changeOrigin: true,
         secure: false,
         ws: true, // Suporta WebSocket se necessário
